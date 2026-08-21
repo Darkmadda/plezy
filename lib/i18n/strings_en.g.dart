@@ -4053,6 +4053,12 @@ class Translations$downloads$en {
 	/// en: 'Custom amount...'
 	String get customAmount => 'Custom amount...';
 
+	/// en: 'Custom amount (any)...'
+	String get customAmountAny => 'Custom amount (any)...';
+
+	/// en: 'Random episodes'
+	String get randomEpisodes => 'Random episodes';
+
 	/// en: 'Include Specials'
 	String get includeSpecials => 'Include Specials';
 
@@ -7836,6 +7842,8 @@ extension on Translations {
 			'downloads.unwatchedOnly' => 'Unwatched only',
 			'downloads.nextNUnwatched' => ({required Object count}) => 'Next ${count} unwatched',
 			'downloads.customAmount' => 'Custom amount...',
+			'downloads.customAmountAny' => 'Custom amount (any)...',
+			'downloads.randomEpisodes' => 'Random episodes',
 			'downloads.includeSpecials' => 'Include Specials',
 			'downloads.howManyEpisodes' => 'How many episodes?',
 			'downloads.invalidEpisodeCount' => 'Enter a valid episode count.',
@@ -7974,10 +7982,10 @@ extension on Translations {
 			'companionRemote.remote.seekForward' => 'Seek Fwd',
 			'companionRemote.remote.volume' => 'Volume',
 			'companionRemote.remote.volumeDown' => 'Down',
-			'companionRemote.remote.volumeUp' => 'Up',
-			'companionRemote.remote.fullscreen' => 'Fullscreen',
 			_ => null,
 		} ?? switch (path) {
+			'companionRemote.remote.volumeUp' => 'Up',
+			'companionRemote.remote.fullscreen' => 'Fullscreen',
 			'companionRemote.remote.subtitles' => 'Subtitles',
 			'companionRemote.remote.audio' => 'Audio',
 			'companionRemote.remote.searchHint' => 'Search on desktop...',
