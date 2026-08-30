@@ -50,6 +50,7 @@ import '../utils/media_quality_labels.dart';
 import '../services/plex_client.dart';
 import '../media/media_server_client.dart';
 import '../services/media_list_playback_launcher.dart';
+import '../services/offline_shuffle_launcher.dart';
 import '../utils/content_utils.dart';
 import '../models/download_models.dart';
 import '../services/download_storage_service.dart';
@@ -2951,16 +2952,12 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
 
   /// Handle shuffle play. Routes through [MediaListPlaybackLauncher.forItem]
   /// so Plex uses its server-side `/playQueues` and Jellyfin builds a local
-  /// shuffled queue from `fetchClientSideEpisodeQueue`.
+  /// shuffled queue from `fetchClientSideEpisodeQueue`. Offline, the queue is
+  /// built from downloaded episodes instead ([OfflineShuffleLauncher]).
   Future<void> _handleShufflePlayWithQueue(BuildContext context, MediaItem metadata) async {
-    if (widget.isOffline) {
-      if (context.mounted) {
-        showErrorSnackBar(context, t.mediaMenu.shuffleNotAvailableOffline);
-      }
-      return;
-    }
-
-    final launcher = MediaListPlaybackLauncher.forItem(context, metadata);
+    final launcher = widget.isOffline
+        ? OfflineShuffleLauncher(context: context)
+        : MediaListPlaybackLauncher.forItem(context, metadata);
     final result = await launcher.launchShuffledShow(metadata: metadata);
     if (result is PlayQueueSuccess && mounted) {
       unawaited(_loadFullMetadata());

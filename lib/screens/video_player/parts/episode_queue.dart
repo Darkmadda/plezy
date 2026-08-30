@@ -84,7 +84,7 @@ extension _VideoPlayerEpisodeQueueMethods on VideoPlayerScreenState {
     final targetMetadata = metadata ?? _currentMetadata;
     try {
       final adjacentEpisodes = _offlineLibraryMode
-          ? _loadAdjacentEpisodesOffline(targetMetadata)
+          ? await _loadAdjacentEpisodesOffline(targetMetadata)
           : await _episode.navigation.loadAdjacentEpisodes(
               context: context,
               metadata: targetMetadata,
@@ -101,8 +101,42 @@ extension _VideoPlayerEpisodeQueueMethods on VideoPlayerScreenState {
   }
 
   /// Load next/previous episodes from locally downloaded content.
-  AdjacentEpisodes _loadAdjacentEpisodesOffline(MediaItem metadata) {
+  ///
+  /// A launcher-seeded queue (offline shuffle play) takes precedence:
+  /// [LocalPlayQueue]s are fully resident, so [PlaybackStateProvider]
+  /// resolves adjacency without any server round trip and the shuffled order
+  /// is honored across episode transitions. Without one, fall back to the
+  /// sequential downloaded-episodes order below.
+  Future<AdjacentEpisodes> _loadAdjacentEpisodesOffline(MediaItem metadata) async {
     if (!metadata.isEpisode) return const AdjacentEpisodes.unavailable();
+
+    try {
+      final playbackState = context.read<PlaybackStateProvider>();
+      if (playbackState.isItemInActiveQueue(metadata)) {
+        // Re-anchor the cursor before reading adjacency — route entry sets
+        // it from a post-frame callback that may not have run yet.
+        playbackState.setCurrentItem(metadata);
+        // No playedPartId offline — same-file siblings are skipped by the
+        // items' own parts, as in the sequential fallback below (#1500).
+        final nextResult = await playbackState.getNextEpisode(metadata.id);
+        final previousResult = await playbackState.getPreviousEpisode(metadata.id);
+        // Map unavailable → failed like EpisodeNavigationService does: with
+        // an active queue, "couldn't resolve" must not read as a confirmed
+        // queue end.
+        return AdjacentEpisodes(
+          next: nextResult.item,
+          previous: previousResult.item,
+          nextStatus: nextResult.status == QueueNavigationStatus.unavailable
+              ? QueueNavigationStatus.failed
+              : nextResult.status,
+          previousStatus: previousResult.status == QueueNavigationStatus.unavailable
+              ? QueueNavigationStatus.failed
+              : previousResult.status,
+        );
+      }
+    } catch (e, st) {
+      appLogger.w('Could not load offline queue adjacency', error: e, stackTrace: st);
+    }
 
     final showKey = metadata.grandparentId;
     if (showKey == null) return const AdjacentEpisodes.unavailable();
