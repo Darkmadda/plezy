@@ -222,12 +222,16 @@ abstract class MediaListPlaybackLauncher {
   }
 
   /// Publish a client-side queue and navigate to its selected item.
+  ///
+  /// [isOffline] enters the player in offline-library mode so playback
+  /// resolves downloaded files instead of server streams.
   @protected
   Future<PlayQueueResult> launchLocalQueuePlayback({
     required BuildContext context,
     required PlaybackStateProvider playbackState,
     required LocalPlayQueue queue,
     required String contextKey,
+    bool isOffline = false,
     Future<void> Function(MediaItem item)? navigateForTesting,
   }) async {
     if (queue.items.isEmpty) return const PlayQueueEmpty();
@@ -251,7 +255,7 @@ abstract class MediaListPlaybackLauncher {
       // launcher-set queue on entry. The items were fetched from the server
       // in this same user action, so session watch patches are already
       // reflected.
-      await navigateToVideoPlayer(context, metadata: itemToPlay, resolveWatchState: false);
+      await navigateToVideoPlayer(context, metadata: itemToPlay, resolveWatchState: false, isOffline: isOffline);
     }
     return const PlayQueueSuccess();
   }
