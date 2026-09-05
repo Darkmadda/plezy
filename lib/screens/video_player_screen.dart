@@ -1322,7 +1322,13 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
       await currentPlayer.configureSubtitleFonts();
       await currentPlayer.setProperty('sub-ass', 'yes'); // Enable libass
       if (Platform.isAndroid && useExoPlayer) {
-        final tunneledPlayback = settingsService.read(SettingsService.tunneledPlayback);
+        // Background audio is incompatible with tunneled playback: a tunneled
+        // session renders frames inside the codec straight to the surface, so
+        // it cannot survive the surface destruction that comes with screen-off
+        // — the whole pipeline stalls and dies rather than pausing. Sessions
+        // that may continue as background audio therefore never tunnel.
+        final tunneledPlayback =
+            settingsService.read(SettingsService.tunneledPlayback) && !_shouldContinueAudioInBackground();
         await currentPlayer.setProperty('tunneled-playback', tunneledPlayback ? 'yes' : 'no');
         await currentPlayer.setProperty('exo-buffer-tier', playbackBufferTier.nativeValue);
       }
