@@ -11,6 +11,7 @@ import '../media/media_item.dart';
 import '../media/media_item_types.dart';
 import '../utils/app_logger.dart';
 import '../utils/formatters.dart';
+import 'app_data_directories.dart';
 import 'settings_service.dart';
 
 /// Thrown when the downloads storage layer cannot create or access a directory
@@ -67,7 +68,30 @@ class DownloadStorageService {
     _baseDownloadsDir = null;
     _artworkDirectoryPath = null;
 
+    if (Platform.isAndroid) await _migrateLegacyAndroidAppData();
     await getArtworkDirectory();
+  }
+
+  /// One-time move of `downloads/` and `artwork/` from the app's internal
+  /// documents directory (their home before Plezy anchored app data to the
+  /// user-reachable external files directory) into the current base. Database
+  /// rows store paths relative to the base, so they re-anchor automatically —
+  /// only the bytes need to move. Best-effort: a file that fails to move stays
+  /// behind and its download re-syncs like any other missing file.
+  Future<void> _migrateLegacyAndroidAppData() async {
+    try {
+      final newBase = await _getBaseAppDir();
+      final legacyBase = await getApplicationDocumentsDirectory();
+      if (path.equals(newBase.path, legacyBase.path)) return;
+      for (final name in const ['downloads', 'artwork']) {
+        final source = Directory(path.join(legacyBase.path, name));
+        if (!await source.exists()) continue;
+        appLogger.i('Moving legacy $name directory from ${source.path} to ${newBase.path}');
+        await moveDirectoryContentsBestEffort(source, Directory(path.join(newBase.path, name)));
+      }
+    } catch (e, st) {
+      appLogger.e('Legacy Android app data migration failed', error: e, stackTrace: st);
+    }
   }
 
   Future<void> refreshCustomPath() async {
@@ -80,19 +104,11 @@ class DownloadStorageService {
     }
   }
 
-  /// Whether [_getBaseAppDir] resolves to the documents directory (mobile) or the
-  /// support directory (desktop). Single source of truth for that split, shared
-  /// with [resolveTaskDirectory] so the two can never disagree.
-  static bool get _baseAppDirIsDocuments => Platform.isAndroid || Platform.isIOS;
-
-  /// Get the base app directory for storing data.
-  /// Uses ApplicationDocumentsDirectory on mobile, ApplicationSupportDirectory on desktop.
-  Future<Directory> _getBaseAppDir() {
-    if (_baseAppDirIsDocuments) {
-      return getApplicationDocumentsDirectory();
-    }
-    return getApplicationSupportDirectory();
-  }
+  /// Get the base app directory for storing data. Delegates the platform split
+  /// to [appDataBaseDirectory] (Android: user-reachable external files dir;
+  /// iOS/tvOS: documents; desktop: application support), shared with
+  /// [resolveTaskDirectory] so the two can never disagree.
+  Future<Directory> _getBaseAppDir() => appDataBaseDirectory();
 
   /// Absolute path of the app-private directory that relative download paths are
   /// anchored to. Moves with the app, so it must be read fresh rather than stored.
@@ -377,19 +393,25 @@ class DownloadStorageService {
 
   /// Base directory and directory to enqueue a download for [absolutePath] with.
   ///
-  /// A target inside the app's own storage is described relative to a base directory
-  /// that background_downloader re-resolves from the live app context on every launch,
-  /// so a task persisted across a restart survives the private data directory moving —
-  /// an iOS container UUID change, or an Android app moved to adoptable storage. Only a
-  /// custom download root, which lives outside that storage and therefore does not move
-  /// with the app, keeps [BaseDirectory.root] and its absolute path.
+  /// On iOS and desktop, a target inside the app's own storage is described
+  /// relative to a base directory that background_downloader re-resolves from
+  /// the live app context on every launch, so a task persisted across a restart
+  /// survives the private data directory moving — e.g. an iOS container UUID
+  /// change. A custom download root lives outside that storage and keeps
+  /// [BaseDirectory.root] with its absolute path.
+  ///
+  /// Android always anchors to [BaseDirectory.root]: the app data base is the
+  /// external files directory (see [_getBaseAppDir]), which has no named
+  /// background_downloader base. Its absolute path is stable across app
+  /// updates; a task left behind by an adoptable-storage move is detected by
+  /// [isRelocatedRootTaskDirectory] and discarded on recovery.
   Future<({BaseDirectory baseDirectory, String directory})> resolveTaskDirectory(String absolutePath) async {
     final relativePath = await toRelativePath(absolutePath);
-    if (relativePath == absolutePath) {
+    if (Platform.isAndroid || relativePath == absolutePath) {
       return (baseDirectory: BaseDirectory.root, directory: path.dirname(absolutePath));
     }
     return (
-      baseDirectory: _baseAppDirIsDocuments ? BaseDirectory.applicationDocuments : BaseDirectory.applicationSupport,
+      baseDirectory: Platform.isIOS ? BaseDirectory.applicationDocuments : BaseDirectory.applicationSupport,
       directory: path.dirname(relativePath),
     );
   }

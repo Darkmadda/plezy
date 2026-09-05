@@ -13,6 +13,7 @@ import 'tables.dart';
 import 'plex_metadata_recovery.dart';
 import 'tvos_database_recovery_store.dart';
 import '../models/download_models.dart';
+import '../services/app_data_directories.dart';
 import '../services/base_shared_preferences_service.dart';
 import '../services/credential_vault.dart';
 import '../utils/app_logger.dart';
@@ -91,7 +92,10 @@ class AppDatabase extends _$AppDatabase {
     if (!await file.parent.exists()) {
       await file.parent.create(recursive: true);
     }
-    if (databaseFile == null && !Platform.isAndroid && !Platform.isIOS && !await file.exists()) {
+    // Desktop moved from Documents/ to ApplicationSupport/; Android moved from
+    // the internal documents directory to the user-reachable external files
+    // directory. Both migrate from the same legacy source location.
+    if (databaseFile == null && !Platform.isIOS && !await file.exists()) {
       await migrateLegacyDesktopDatabase(target: file);
     }
 
@@ -1357,9 +1361,9 @@ String _rescopePinnedPlexMetadataStatement({
 ''';
 
 Future<File> _resolveProductionDatabaseFile() async {
-  final dbFolder = (Platform.isAndroid || Platform.isIOS)
-      ? await getApplicationDocumentsDirectory()
-      : await getApplicationSupportDirectory();
+  // On Android this is user-reachable (USB/adb) so a desktop install's
+  // database can be copied in or out. See appDataBaseDirectory.
+  final dbFolder = await appDataBaseDirectory();
   return File(p.join(dbFolder.path, 'plezy_downloads.db'));
 }
 
@@ -1390,7 +1394,8 @@ QueryExecutor _createNativeDatabase(File file) {
   );
 }
 
-/// Move the legacy desktop DB from `Documents/` to `ApplicationSupport/`.
+/// Move the legacy DB from `Documents/` to the current canonical location
+/// (desktop: `ApplicationSupport/`; Android: the external files directory).
 /// `File.rename` only works within a single volume — Windows users with
 /// OneDrive-redirected Documents (or any cross-drive setup) hit
 /// `ERROR_NOT_SAME_DEVICE` (errno 17), and the uncaught throw used to
@@ -1439,6 +1444,7 @@ Future<void> migrateLegacyDesktopDatabase({
     });
     if (!moved) return;
     appLogger.i('Moved legacy DB from ${oldFile.path} → ${target.path}');
+    await _migrateLegacyDatabaseSidecars(oldFile, target);
     return;
   } on FileSystemException catch (e) {
     appLogger.w('Legacy DB rename failed (osError=${e.osError?.errorCode}); falling back to copy', error: e);
@@ -1483,6 +1489,7 @@ Future<void> migrateLegacyDesktopDatabase({
       appLogger.w('Legacy DB copied but old file delete failed: $e');
     }
     appLogger.i('Copied legacy DB from ${oldFile.path} → ${target.path}');
+    await _migrateLegacyDatabaseSidecars(oldFile, target);
   } catch (e, st) {
     // A failed copy or final rename never touches the canonical path. Keep
     // the legacy source so a future launch can retry.
@@ -1492,6 +1499,36 @@ Future<void> migrateLegacyDesktopDatabase({
       if (await temporary.exists()) await temporary.delete();
     } catch (e, st) {
       appLogger.w('Failed to clean legacy DB migration temporary file', error: e, stackTrace: st);
+    }
+  }
+}
+
+/// Carry the legacy database's WAL/SHM sidecars to the new location so commits
+/// still sitting in an un-checkpointed WAL survive the move. Runs after the
+/// main file is published and before the database is opened. When a legacy
+/// sidecar does not exist, any orphan sidecar already at the target is deleted
+/// instead — replaying a stray WAL from an unrelated earlier partial write
+/// against the migrated database must never happen. Best-effort beyond that:
+/// a missing `-shm` is rebuilt by SQLite, and WAL frames carry per-frame
+/// checksums, so a partial copy is truncated during recovery rather than
+/// corrupting the database.
+Future<void> _migrateLegacyDatabaseSidecars(File oldFile, File target) async {
+  for (final suffix in const ['-wal', '-shm']) {
+    final source = File('${oldFile.path}$suffix');
+    final destination = File('${target.path}$suffix');
+    try {
+      if (!await source.exists()) {
+        if (await destination.exists()) await destination.delete();
+        continue;
+      }
+      try {
+        await source.rename(destination.path);
+      } on FileSystemException {
+        await _copyFileAndSync(source, destination);
+        await source.delete();
+      }
+    } catch (e, st) {
+      appLogger.w('Failed to migrate database sidecar ${source.path}', error: e, stackTrace: st);
     }
   }
 }

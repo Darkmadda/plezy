@@ -32,6 +32,7 @@ import 'profiles/plex_home_service.dart';
 import 'screens/auth_screen.dart';
 import 'screens/profile/pin_entry_dialog.dart';
 import 'screens/profile/profile_switch_screen.dart';
+import 'services/credential_vault.dart';
 import 'services/storage_service.dart';
 import 'services/device_performance.dart';
 import 'services/macos_window_service.dart';
@@ -904,6 +905,11 @@ Future<_StartupDependencies> _initializeStartup(SettingsService settings) async 
 
     final storage = await _gatePhase(StartupPhase.storage, StorageService.getInstance);
     markStartupPhase('platform-services');
+
+    // Must precede the database open: recovery/registry reads reveal vault
+    // ciphertexts, and the vault only consults the key-file location resolved
+    // here (never throws; a failed lookup degrades to the prefs-only key).
+    await CredentialVault.initializeKeyFileLocation();
 
     AndroidExitDiagnostics.markStartupPhase(AndroidStartupPhase.databaseOpenStarted);
     final databaseBootstrap = await _gatePhase(

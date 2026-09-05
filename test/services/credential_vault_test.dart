@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:plezy/services/credential_vault.dart';
@@ -75,6 +76,57 @@ void main() {
 
       expect(result.config['accountToken'], 'plain-tok');
       expect(result.migrated, isTrue);
+    });
+  });
+
+  group('CredentialVault key file', () {
+    late Directory keyDir;
+
+    setUp(() async {
+      keyDir = await Directory.systemTemp.createTemp('vault-key-test');
+      CredentialVault.keyFileDirectoryOverride = () async => keyDir;
+    });
+
+    tearDown(() async {
+      CredentialVault.keyFileDirectoryOverride = null;
+      await keyDir.delete(recursive: true);
+    });
+
+    test('persists the key next to the database so a copied install decrypts', () async {
+      final protected = await CredentialVault.protect('super-secret');
+      expect(File('${keyDir.path}/credential_vault.key').existsSync(), isTrue);
+
+      // Fresh install: empty prefs, no memoized key — only the copied key file.
+      resetSharedPreferencesForTest();
+      CredentialVault.resetKeyForTesting();
+
+      expect(await CredentialVault.reveal(protected), 'super-secret');
+    });
+
+    test('key file wins over a diverged preferences key', () async {
+      final protected = await CredentialVault.protect('super-secret');
+
+      // New prefs grow their own key while the vault is not memoized (the
+      // copied-database scenario: local install signed in independently).
+      resetSharedPreferencesForTest();
+      CredentialVault.resetKeyForTesting();
+      CredentialVault.keyFileDirectoryOverride = null;
+      await CredentialVault.protect('unrelated');
+
+      CredentialVault.resetKeyForTesting();
+      CredentialVault.keyFileDirectoryOverride = () async => keyDir;
+      expect(await CredentialVault.reveal(protected), 'super-secret');
+    });
+
+    test('falls back to the preferences key when no file exists', () async {
+      CredentialVault.keyFileDirectoryOverride = null;
+      final protected = await CredentialVault.protect('super-secret');
+
+      CredentialVault.resetKeyForTesting();
+      CredentialVault.keyFileDirectoryOverride = () async => keyDir;
+      expect(await CredentialVault.reveal(protected), 'super-secret');
+      // And the adopted prefs key is published as a file for future copies.
+      expect(File('${keyDir.path}/credential_vault.key').existsSync(), isTrue);
     });
   });
 }
