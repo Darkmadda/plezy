@@ -422,6 +422,16 @@ extension _VideoPlayerPlaybackServiceMethods on VideoPlayerScreenState {
     final mediaControlsManager = MediaControlsManager();
     _mediaControlsManager = mediaControlsManager;
 
+    // Background audio (handheld Android): opt this session into the plugin's
+    // foreground-service policy while still foregrounded — flipping it only
+    // when backgrounding would race Android's FGS background-start limits.
+    // Android 13+ needs POST_NOTIFICATIONS for the MediaStyle notification;
+    // a denial only hides it, the service still runs.
+    if (_shouldContinueAudioInBackground()) {
+      unawaited(mediaControlsManager.setBackgroundMode(true));
+      unawaited(NotificationPermission.ensure());
+    }
+
     final mediaControlRouter = MediaControlRouter(
       // Authority stays Watch Together's. The automotive gate lives in the
       // playback-intent wrappers below, so `onPause` can never be denied: a

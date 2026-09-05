@@ -359,6 +359,9 @@ class FakePlayer implements Player {
   Future<void> updateFrame() async {}
 
   @override
+  Future<void> setVideoDecodingEnabled(bool enabled) async {}
+
+  @override
   Future<bool> setVideoFrameRate(
     double fps,
     int durationMs, {

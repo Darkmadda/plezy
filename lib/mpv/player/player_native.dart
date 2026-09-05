@@ -852,6 +852,14 @@ class PlayerNative extends PlayerBase {
     return changed && !_nativeCoreUnavailable;
   }
 
+  @override
+  Future<void> setVideoDecodingEnabled(bool enabled) async {
+    if (audioOnly || _nativeCoreUnavailable) return;
+    // 'auto' re-selects the container's default video track; video items carry
+    // a single video stream, so this restores the one that was playing.
+    await setProperty('vid', enabled ? 'auto' : 'no');
+  }
+
   static const int _passthroughAudioField = 1 << 0;
   static const int _normalizationAudioField = 1 << 1;
   static const int _downmixAudioField = 1 << 2;

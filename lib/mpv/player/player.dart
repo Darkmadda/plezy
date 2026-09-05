@@ -254,6 +254,14 @@ abstract class Player {
   /// Returns true if the operation was successful.
   Future<bool> setVisible(bool visible, {bool restoreOnWindowVisible = false});
 
+  /// Enable or disable video decoding while audio playback continues.
+  ///
+  /// Used by background audio: with the app hidden there is nothing to render,
+  /// so releasing the video decoder saves battery. mpv drops/re-selects the
+  /// video track (`vid`), Android ExoPlayer disables the video renderer via
+  /// track selection. Re-enabling restores the stream's default video track.
+  Future<void> setVideoDecodingEnabled(bool enabled);
+
   /// Update the video frame/surface dimensions.
   ///
   /// On iOS/macOS, this updates the Metal layer's frame to match the current

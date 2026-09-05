@@ -91,6 +91,15 @@ extension _VideoPlayerPlaybackPromptMethods on VideoPlayerScreenState {
       if (!mounted) return;
       final autoPlayEnabled = settings.read(SettingsService.autoPlayNextEpisode);
 
+      // Background audio: the screen is off or the app is hidden, so the
+      // countdown UI has no audience — advance directly, like PiP above.
+      // With auto-play off this falls through to the (invisible) prompt,
+      // which greets the user when they return.
+      if (_backgroundAudioActive && autoPlayEnabled) {
+        unawaited(_playNextKeepingBackgroundAudio());
+        return;
+      }
+
       if (skipAutoPlayCountdown && autoPlayEnabled) {
         unawaited(_playNext());
         return;
@@ -116,6 +125,22 @@ extension _VideoPlayerPlaybackPromptMethods on VideoPlayerScreenState {
     } else if (navigationAction == CompletionNavigationAction.exit && !_episode.completionLatch.triggered) {
       _episode.completionLatch.latch();
       unawaited(_handleBackButton());
+    }
+  }
+
+  /// EOF advance while backgrounded with audio playing. The in-place reload
+  /// normally reuses the native core, whose disabled-video track policy
+  /// persists across opens — but a failure path can rebuild the core with
+  /// video decoding back on, so re-drop it once the next episode is up.
+  Future<void> _playNextKeepingBackgroundAudio() async {
+    await _playNext();
+    if (!mounted || !_backgroundAudioActive) return;
+    final currentPlayer = player;
+    if (currentPlayer == null) return;
+    try {
+      await currentPlayer.setVideoDecodingEnabled(false);
+    } catch (e) {
+      appLogger.w('Failed to re-drop video decoding after background auto-advance', error: e);
     }
   }
 

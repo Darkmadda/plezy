@@ -241,6 +241,11 @@ class ExoPlayerCore(private val activity: Activity) :
     get() = tunnelingDisabledForAudioCodec || tunnelingDisabledForVideoCodec || tunnelingDisabledForDecodedPcm || tunnelingDisabledForAudioRecovery
   private var currentTunneledPlayback: Boolean = false
 
+  // Background audio: the video renderer is disabled while the app is hidden.
+  // Tunneling pairs the audio path with a video codec session, so it must be
+  // off for as long as video decoding is.
+  private var videoDecodingDisabled: Boolean = false
+
   // Loudness normalization (#1289): audiofx effects only process non-tunneled
   // PCM mixer streams, so while enabled we block direct/bitstream output and
   // disable tunneling.
@@ -2648,7 +2653,8 @@ class ExoPlayerCore(private val activity: Activity) :
     audioOverride: TrackSelectionOverride? = null,
     textOverride: TrackSelectionOverride? = null,
     audioDisabled: Boolean? = null,
-    textDisabled: Boolean? = null
+    textDisabled: Boolean? = null,
+    videoDisabled: Boolean? = null
   ) {
     val selector = trackSelector ?: return
     val builder = selector.buildUponParameters()
@@ -2678,6 +2684,10 @@ class ExoPlayerCore(private val activity: Activity) :
       builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, textDisabled)
       selectorChanged = true
     }
+    if (videoDisabled != null) {
+      builder.setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, videoDisabled)
+      selectorChanged = true
+    }
 
     val shouldTunnel = calculateTunnelingEnabled() ?: return
     selectorChanged = updateCurrentTunnelingState(reason, shouldTunnel) || selectorChanged
@@ -2694,7 +2704,8 @@ class ExoPlayerCore(private val activity: Activity) :
       !tunnelingDisabledForCodec &&
       !tunnelingDisabledForAssSubtitles &&
       !audioDelayActive &&
-      !audioNormalizationEnabled
+      !audioNormalizationEnabled &&
+      !videoDecodingDisabled
   }
 
   private fun updateCurrentTunnelingState(reason: String, shouldTunnel: Boolean): Boolean {
@@ -3830,6 +3841,21 @@ class ExoPlayerCore(private val activity: Activity) :
     exoPlayer?.setPlaybackSpeed(clampedSpeed)
     updateTunnelingState("speed changed")
     delegate?.onPropertyChange("speed", clampedSpeed.toDouble())
+  }
+
+  // Background audio: park the video renderer (releasing its MediaCodec)
+  // while audio keeps playing, or restore the stream's default video track.
+  // The screen is off out there, so nothing else keeps the SoC awake between
+  // buffer refills — WAKE_MODE_NETWORK holds CPU/Wi-Fi for as long as
+  // playback runs, and only then.
+  fun setVideoDecodingEnabled(enabled: Boolean) {
+    if (videoDecodingDisabled == !enabled) return
+    videoDecodingDisabled = !enabled
+    exoPlayer?.setWakeMode(if (enabled) C.WAKE_MODE_NONE else C.WAKE_MODE_NETWORK)
+    applyTrackSelectorPolicy(
+      reason = if (enabled) "video decoding re-enabled" else "video decoding disabled (background audio)",
+      videoDisabled = !enabled
+    )
   }
 
   fun selectAudioTrack(trackId: String) {

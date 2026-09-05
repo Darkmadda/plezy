@@ -645,6 +645,12 @@ class Translations$settings$en {
 	/// en: '${minutes} minutes'
 	String minutesUnit({required Object minutes}) => '${minutes} minutes';
 
+	/// en: 'Continue audio in background'
+	String get backgroundAudio => 'Continue audio in background';
+
+	/// en: 'Keep playing sound when the screen turns off or the app is hidden'
+	String get backgroundAudioDescription => 'Keep playing sound when the screen turns off or the app is hidden';
+
 	/// en: 'Remember track selections per show/movie'
 	String get rememberTrackSelections => 'Remember track selections per show/movie';
 
@@ -6619,6 +6625,8 @@ extension on Translations {
 			'settings.secondsUnit' => ({required Object seconds}) => '${seconds} seconds',
 			'settings.defaultSleepTimer' => 'Default Sleep Timer',
 			'settings.minutesUnit' => ({required Object minutes}) => '${minutes} minutes',
+			'settings.backgroundAudio' => 'Continue audio in background',
+			'settings.backgroundAudioDescription' => 'Keep playing sound when the screen turns off or the app is hidden',
 			'settings.rememberTrackSelections' => 'Remember track selections per show/movie',
 			'settings.rememberTrackSelectionsDescription' => 'Remember audio and subtitle choices per title',
 			'settings.followServerTrackSelections' => 'Use server\'s per-episode track selections',
@@ -6952,10 +6960,10 @@ extension on Translations {
 			'mediaMenu.deleteSeasonTitle' => 'Delete this season?',
 			'mediaMenu.deleteShowTitle' => 'Delete this show?',
 			'mediaMenu.deleteMovieTitle' => 'Delete this movie?',
-			'mediaMenu.deleteEpisodeConfirm' => 'Delete episode',
-			'mediaMenu.deleteSeasonConfirm' => 'Delete season',
 			_ => null,
 		} ?? switch (path) {
+			'mediaMenu.deleteEpisodeConfirm' => 'Delete episode',
+			'mediaMenu.deleteSeasonConfirm' => 'Delete season',
 			'mediaMenu.deleteShowConfirm' => 'Delete show',
 			'mediaMenu.deleteMovieConfirm' => 'Delete movie',
 			'mediaMenu.deleteAnyway' => 'Delete anyway',
@@ -7466,10 +7474,10 @@ extension on Translations {
 			'explore.episodeCount' => ({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('en'))(n, one: '${n} episode', other: '${n} episodes', ), 
 			'explore.cast' => 'Cast',
 			'explore.characters' => 'Characters',
-			'explore.addToWatchlist' => 'Add to Watchlist',
-			'explore.removeFromWatchlist' => 'Remove from Watchlist',
 			_ => null,
 		} ?? switch (path) {
+			'explore.addToWatchlist' => 'Add to Watchlist',
+			'explore.removeFromWatchlist' => 'Remove from Watchlist',
 			'explore.addedToWatchlist' => 'Added to watchlist',
 			'explore.removedFromWatchlist' => 'Removed from watchlist',
 			'explore.watchlistUpdateFailed' => 'Couldn\'t update watchlist',
@@ -7980,10 +7988,10 @@ extension on Translations {
 			'companionRemote.remote.seekBack' => 'Seek Back',
 			'companionRemote.remote.stop' => 'Stop',
 			'companionRemote.remote.seekForward' => 'Seek Fwd',
-			'companionRemote.remote.volume' => 'Volume',
-			'companionRemote.remote.volumeDown' => 'Down',
 			_ => null,
 		} ?? switch (path) {
+			'companionRemote.remote.volume' => 'Volume',
+			'companionRemote.remote.volumeDown' => 'Down',
 			'companionRemote.remote.volumeUp' => 'Up',
 			'companionRemote.remote.fullscreen' => 'Fullscreen',
 			'companionRemote.remote.subtitles' => 'Subtitles',

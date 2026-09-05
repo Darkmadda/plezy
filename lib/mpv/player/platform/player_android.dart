@@ -594,6 +594,12 @@ class PlayerAndroid extends PlayerBase {
   }
 
   @override
+  Future<void> setVideoDecodingEnabled(bool enabled) async {
+    if (disposed || !initialized) return;
+    await invoke('setVideoDecodingEnabled', {'enabled': enabled});
+  }
+
+  @override
   Future<bool> requestAudioFocus() async {
     if (disposed) return false;
     await _ensureInitialized();

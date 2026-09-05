@@ -236,6 +236,7 @@ class ExoPlayerPlugin :
       "selectSubtitleTrack" -> handleSelectSubtitleTrack(call, result)
       "addSubtitleTrack" -> handleAddSubtitleTrack(call, result)
       "setVisible" -> handleSetVisible(call, result)
+      "setVideoDecodingEnabled" -> handleSetVideoDecodingEnabled(call, result)
       "updateFrame" -> handleUpdateFrame(result)
       "setVideoFrameRate" -> handleSetVideoFrameRate(call, result)
       "clearVideoFrameRate" -> handleClearVideoFrameRate(result)
@@ -989,6 +990,26 @@ class ExoPlayerPlugin :
         playerCore?.addSubtitleTrack(uri, title, language, mimeType, select)
         result.success(null)
       }
+    } ?: result.success(null)
+  }
+
+  // Background audio: stop/restore video decoding while audio keeps playing.
+  private fun handleSetVideoDecodingEnabled(call: MethodCall, result: MethodChannel.Result) {
+    val enabled = call.argument<Boolean>("enabled")
+
+    if (enabled == null) {
+      result.error("INVALID_ARGS", "Missing 'enabled'", null)
+      return
+    }
+
+    if (usingMpvFallback) {
+      // 'auto' re-selects the container's default video track.
+      handleFallbackMpvProperty("vid", if (enabled) "auto" else "no", result)
+      return
+    }
+    activity?.runOnUiThread {
+      playerCore?.setVideoDecodingEnabled(enabled)
+      result.success(null)
     } ?: result.success(null)
   }
 

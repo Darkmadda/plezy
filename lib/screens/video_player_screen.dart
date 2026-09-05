@@ -74,6 +74,7 @@ import '../providers/user_profile_provider.dart';
 import '../utils/app_logger.dart';
 import '../utils/dialogs.dart';
 import '../utils/log_redaction_manager.dart';
+import '../utils/notification_permission.dart';
 import '../utils/live_tv_player_navigation.dart';
 import '../utils/player_utils.dart';
 import '../utils/orientation_helper.dart';
@@ -643,6 +644,11 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
   // App lifecycle state tracking
   bool _wasPlayingBeforeInactive = false;
   bool _hiddenForBackground = false;
+
+  /// Handheld Android background audio: playback continued into the
+  /// background with video decoding dropped. Set by [_handleAppHidden],
+  /// cleared when [_handleAppResumed] restores the video track.
+  bool _backgroundAudioActive = false;
   bool _resumeAfterAppleAudioSessionPause = false;
   DateTime? _lastPlaybackPauseAt;
   bool _autoPipEnabled = false;
@@ -1095,9 +1101,12 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
           _recordLifecycleState('paused', action: 'skipped_for_pip');
           break;
         }
-        // We don't support background playback
         if (_mediaControls.shouldSuspendForTvBackground) {
           unawaited(_mediaControls.suspendForTvBackground('paused'));
+        } else if (_shouldContinueAudioInBackground()) {
+          // Background audio: the OS media session must stay up — it carries
+          // the foreground service and MediaStyle notification that keep the
+          // process (and the audio) alive while the app is hidden.
         } else {
           unawaited(_mediaControlsManager?.clear());
         }

@@ -242,6 +242,13 @@ class _PlaybackSettingsScreenState extends State<PlaybackSettingsScreen> {
           subtitle: t.settings.companionRemoteServerDescription,
           onAfterWrite: (v) => applyCompanionRemoteServerSetting(context, v),
         ),
+      if (Platform.isAndroid && PlatformDetector.isHandheld(context))
+        SettingSwitchTile(
+          pref: SettingsService.backgroundAudio,
+          icon: Symbols.music_video_rounded,
+          title: t.settings.backgroundAudio,
+          subtitle: t.settings.backgroundAudioDescription,
+        ),
       SettingSwitchTile(
         pref: SettingsService.rememberTrackSelections,
         icon: Symbols.bookmark_rounded,

@@ -1063,6 +1063,10 @@ abstract class PlayerBase with PlayerStreamControllersMixin implements Player {
   Future<void> updateFrame() async {}
 
   @override
+  // ignore: no-empty-block - base no-op, overridden where background audio is supported
+  Future<void> setVideoDecodingEnabled(bool enabled) async {}
+
+  @override
   Future<bool> isHdrOutputSupported() async => false;
 
   @override

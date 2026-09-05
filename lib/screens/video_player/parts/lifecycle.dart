@@ -3,6 +3,29 @@ part of '../../video_player_screen.dart';
 bool shouldPauseVideoForBackground({required bool isHandheld, required bool isTv, required bool isAutomotive}) =>
     isHandheld || isTv || isAutomotive;
 
+/// Whether backgrounding should keep audio playing (with video decoding
+/// dropped) instead of pausing. Handheld Android only: TV releases its AV
+/// pipeline to protect shared decoder hardware, Automotive pauses for
+/// driver-distraction rules, and Apple platforms background via auto-PiP.
+/// Live TV keeps its tuned-session semantics, and a Watch Together peer
+/// advancing while its heartbeats are suppressed would desync the room.
+bool shouldContinueAudioInBackground({
+  required bool isAndroid,
+  required bool isHandheld,
+  required bool isTv,
+  required bool isAutomotive,
+  required bool isLive,
+  required bool inWatchTogetherSession,
+  required bool backgroundAudioEnabled,
+}) =>
+    isAndroid &&
+    isHandheld &&
+    !isTv &&
+    !isAutomotive &&
+    !isLive &&
+    !inWatchTogetherSession &&
+    backgroundAudioEnabled;
+
 extension _VideoPlayerLifecycleMethods on VideoPlayerScreenState {
   void _enqueueLifecycleTransition(String label, Future<void> Function() transition) {
     _lifecycleTransition = _lifecycleTransition
@@ -97,11 +120,14 @@ extension _VideoPlayerLifecycleMethods on VideoPlayerScreenState {
     }
 
     final isAutomotive = PlatformDetector.isAutomotive();
-    final shouldPauseForBackground = shouldPauseVideoForBackground(
-      isHandheld: PlatformDetector.isHandheld(context),
-      isTv: isTv,
-      isAutomotive: isAutomotive,
-    );
+    final continueAudio = _shouldContinueAudioInBackground();
+    final shouldPauseForBackground =
+        !continueAudio &&
+        shouldPauseVideoForBackground(
+          isHandheld: PlatformDetector.isHandheld(context),
+          isTv: isTv,
+          isAutomotive: isAutomotive,
+        );
 
     // Pause first so Android MPV does not keep decoding against a transient
     // background surface while the app is locking or hiding.
@@ -153,10 +179,39 @@ extension _VideoPlayerLifecycleMethods on VideoPlayerScreenState {
       return;
     }
 
+    if (continueAudio) {
+      // Nothing renders while hidden, so release the video decoder; audio and
+      // progress reporting continue and the media notification (foreground
+      // service, enabled at service init) keeps the process alive. Re-assert
+      // background mode for sessions that became eligible after init (Watch
+      // Together detached, setting flipped mid-playback) — the plugin retries
+      // the service start on the next playing update if Android defers it.
+      unawaited(_mediaControlsManager?.setBackgroundMode(true));
+      _backgroundAudioActive = true;
+      try {
+        await currentPlayer.setVideoDecodingEnabled(false);
+      } catch (e) {
+        appLogger.w('Failed to drop video decoding for background audio', error: e);
+      }
+      if (!mounted || currentPlayer != player) return;
+      _recordLifecycleState('hidden', action: 'background_audio');
+    }
+
     _hiddenForBackground = true;
     await currentPlayer.setVisible(false, restoreOnWindowVisible: Platform.isMacOS);
     _recordLifecycleState('hidden', action: 'render_hidden');
   }
+
+  /// Instance wiring for [shouldContinueAudioInBackground].
+  bool _shouldContinueAudioInBackground() => shouldContinueAudioInBackground(
+    isAndroid: Platform.isAndroid,
+    isHandheld: PlatformDetector.isHandheld(context),
+    isTv: PlatformDetector.isTV(),
+    isAutomotive: PlatformDetector.isAutomotive(),
+    isLive: widget.isLive,
+    inWatchTogetherSession: _activeWatchTogetherSession() != null,
+    backgroundAudioEnabled: SettingsService.instance.read(SettingsService.backgroundAudio),
+  );
 
   Future<void> _handleAppResumed() async {
     _recordLifecycleState('resumed', action: 'begin');
@@ -173,6 +228,23 @@ extension _VideoPlayerLifecycleMethods on VideoPlayerScreenState {
     }
 
     final currentPlayer = player;
+
+    // Background audio dropped the video track on the way out; bring it back
+    // before the render layer is restored so the refresh below has frames to
+    // show. Seamless by design: audio never stopped, so no rewind and no
+    // auto-resume (the [_wasPlayingBeforeInactive] latch was never set).
+    if (_backgroundAudioActive) {
+      _backgroundAudioActive = false;
+      if (currentPlayer != null && _isPlayerInitialized) {
+        try {
+          await currentPlayer.setVideoDecodingEnabled(true);
+        } catch (e) {
+          appLogger.w('Failed to restore video decoding after background audio', error: e);
+        }
+        if (!mounted || currentPlayer != player) return;
+        _recordLifecycleState('resumed', action: 'background_audio_video_restored');
+      }
+    }
 
     // Restore render layer if it was hidden for background, then force a
     // video-output refresh before any auto-resume logic runs.

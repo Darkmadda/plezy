@@ -480,6 +480,10 @@ class SettingsService extends BaseSharedPreferencesService {
   static const musicVolume = DoublePref('music_volume', defaultValue: 100.0);
   static const autoPlayNextEpisode = BoolPref('auto_play_next_episode', defaultValue: true);
 
+  /// Handheld Android: keep playing a video item's audio when the app is
+  /// backgrounded or the screen turns off (the video track stops decoding).
+  static const backgroundAudio = BoolPref('background_audio', defaultValue: true);
+
   /// Where Specials (season 0) land in the episode watch order (#1416/#1952).
   /// Consumed by [sortEpisodesByWatchOrder] (Jellyfin online queue, offline
   /// next/prev, download/sync "next N", offline OnDeck, Plex fallback queue)
@@ -1000,6 +1004,7 @@ class SettingsService extends BaseSharedPreferencesService {
     dvConversionMode,
     musicVolume,
     autoPlayNextEpisode,
+    backgroundAudio,
     specialsOrdering,
     useExoPlayer,
     startupSection,
