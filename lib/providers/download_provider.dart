@@ -10,6 +10,7 @@ import '../media/media_item_types.dart';
 import '../media/media_kind.dart';
 import '../media/media_version.dart';
 import '../models/download_models.dart';
+import '../models/transcode_quality_preset.dart';
 import '../utils/download_version_utils.dart';
 import '../database/app_database.dart';
 import '../database/download_operations.dart';
@@ -1041,6 +1042,7 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
     int? maxCount,
     bool random = false,
     bool includeSpecials = true,
+    TranscodeQualityPreset? quality,
   }) async {
     if (!_downloadManager.downloadsSupported) return 0;
 
@@ -1069,6 +1071,7 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
           client,
           ownership: ownership,
           mediaIndex: config.mediaIndex,
+          quality: quality,
         );
         return queued ? 1 : 0;
       } else if (metadata.kind == MediaKind.album || metadata.kind == MediaKind.artist) {
@@ -1091,6 +1094,7 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
             skipExisting: false,
             random: random,
             includeSpecials: includeSpecials,
+            quality: quality,
           ),
         );
       } else {
@@ -1142,6 +1146,7 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
     MediaServerClient client, {
     DownloadFilter filter = DownloadFilter.all,
     SyncRuleItem? syncRule,
+    TranscodeQualityPreset? quality,
   }) async {
     if (!_downloadManager.downloadsSupported) return 0;
 
@@ -1192,6 +1197,7 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
         client,
         ownership: ownership,
         relatedContext: relatedContext,
+        quality: quality,
       );
       if (syncRule != null) {
         await _associateSyncRuleDownload(syncRule, withServer.globalKey, ownership);
@@ -1213,6 +1219,7 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
     int mediaIndex = 0,
     DownloadVersionConfig? versionConfig,
     _RelatedMetadataDownloadContext? relatedContext,
+    TranscodeQualityPreset? quality,
   }) async {
     if (!_downloadManager.downloadsSupported) return false;
 
@@ -1311,7 +1318,12 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
     safeNotifyListeners();
 
     if (!_isQueueOwnershipCurrent(ownership)) return false;
-    await _downloadManager.queueDownload(metadata: metadataToStore, client: client, mediaIndex: resolvedIndex);
+    await _downloadManager.queueDownload(
+      metadata: metadataToStore,
+      client: client,
+      mediaIndex: resolvedIndex,
+      quality: quality,
+    );
     return true;
   }
 
@@ -1419,6 +1431,7 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
     MediaItem metadata,
     MediaServerClient client, {
     DownloadVersionConfig? versionConfig,
+    TranscodeQualityPreset? quality,
   }) async {
     if (!metadata.isShow && !metadata.isSeason) {
       throw Exception('queueMissingEpisodes only supports shows/seasons');
@@ -1432,6 +1445,7 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
       filter: DownloadFilter.all,
       maxCount: null,
       skipExisting: true,
+      quality: quality,
     );
     if (metadata.isShow) {
       appLogger.i('Queued $queued missing episodes for show ${metadata.title}');
@@ -1452,6 +1466,7 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
     required bool skipExisting,
     bool random = false,
     bool includeSpecials = true,
+    TranscodeQualityPreset? quality,
   }) async {
     final unwatchedOnly = filter == DownloadFilter.unwatched;
     // Downloading the Specials season itself must still queue its episodes —
@@ -1500,6 +1515,7 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
         client,
         ownership: ownership,
         versionConfig: versionConfig,
+        quality: quality,
         relatedContext: relatedContext,
       );
       if (queued) count++;

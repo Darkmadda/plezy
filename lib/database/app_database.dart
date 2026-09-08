@@ -369,7 +369,7 @@ class AppDatabase extends _$AppDatabase {
   static const FormatException _invalidRecoveryImage = FormatException('Invalid tvOS database recovery image');
 
   @override
-  int get schemaVersion => 22;
+  int get schemaVersion => 23;
 
   @override
   MigrationStrategy get migration {
@@ -744,6 +744,13 @@ class AppDatabase extends _$AppDatabase {
           await _ignoreAlreadyExists(
             'SyncRules.randomEpisodes column',
             () => m.addColumn(syncRules, syncRules.randomEpisodes),
+          );
+        }
+        if (from < 23) {
+          appLogger.i('Adding qualityPreset column to DownloadedMedia (v23 migration)');
+          await _ignoreAlreadyExists(
+            'DownloadedMedia.qualityPreset column',
+            () => m.addColumn(downloadedMedia, downloadedMedia.qualityPreset),
           );
         }
       },

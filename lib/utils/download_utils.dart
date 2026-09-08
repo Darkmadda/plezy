@@ -18,12 +18,68 @@ import '../services/sync_rule_executor.dart';
 import '../widgets/background_download_warning_banner.dart';
 import '../widgets/dialog_action_button.dart';
 import '../widgets/focusable_list_tile.dart';
+import '../media/media_version.dart';
+import '../models/transcode_quality_preset.dart';
 import 'app_logger.dart';
 import 'content_utils.dart';
 import 'dialogs.dart';
 import 'download_version_utils.dart';
 import 'platform_detector.dart';
+import 'quality_preset_labels.dart';
 import 'snackbar_helper.dart';
+
+/// Per-download quality step shown by every manual video download flow. The
+/// first row applies the global Download Quality setting (labelled with it),
+/// so accepting the default stays one tap; any other row overrides it for
+/// this download only. Size hints come from the selected version's
+/// bitrate/size when known. Returns null when dismissed, which cancels the
+/// download flow. Music flows never call this — audio downloads always fetch
+/// the original file.
+Future<TranscodeQualityPreset?> promptDownloadQuality(
+  BuildContext context, {
+  required MediaItem metadata,
+  int mediaIndex = 0,
+}) {
+  final defaultPreset =
+      SettingsService.instanceOrNull?.read(SettingsService.downloadQualityPreset) ?? TranscodeQualityPreset.original;
+  final versions = metadata.mediaVersions;
+  final version = versions != null && mediaIndex >= 0 && mediaIndex < versions.length ? versions[mediaIndex] : null;
+
+  String labelFor(TranscodeQualityPreset p) {
+    final base = qualityPresetLabel(p);
+    final size = qualityPresetSizeEstimate(
+      preset: p,
+      sourceBitrateKbps: version?.bitrate,
+      sourceDurationMs: metadata.durationMs,
+      sourceSizeBytes: _versionSizeBytes(version),
+    );
+    return size == null ? base : '$base · $size';
+  }
+
+  return showOptionPickerDialog<TranscodeQualityPreset>(
+    context,
+    title: t.downloads.selectQuality,
+    options: [
+      (
+        icon: Symbols.check_circle_rounded,
+        label: t.downloads.qualityUseDefault(quality: qualityPresetLabel(defaultPreset)),
+        value: defaultPreset,
+      ),
+      ...TranscodeQualityPreset.displayOrder.map((p) => (icon: null, label: labelFor(p), value: p)),
+    ],
+  );
+}
+
+int? _versionSizeBytes(MediaVersion? version) {
+  if (version == null || version.parts.isEmpty) return null;
+  var total = 0;
+  for (final p in version.parts) {
+    final s = p.sizeBytes;
+    if (s == null || s <= 0) return null;
+    total += s;
+  }
+  return total > 0 ? total : null;
+}
 
 @visibleForTesting
 String? validateEpisodeCountInput(String text, {required bool allowZero}) {
@@ -189,6 +245,12 @@ Future<DownloadResult?> showDownloadOptionsAndQueue(
   final versionConfig = await resolveDownloadVersion(context, metadata, client);
   if (versionConfig == null || !context.mounted) return null;
 
+  TranscodeQualityPreset? quality;
+  if (!kind.isMusic) {
+    quality = await promptDownloadQuality(context, metadata: metadata, mediaIndex: versionConfig.mediaIndex);
+    if (quality == null || !context.mounted) return null;
+  }
+
   // Create or update sync rule before queueing (so the rule exists even if queue fails)
   bool syncRuleUpdated = false;
   if (keepSynced) {
@@ -223,6 +285,7 @@ Future<DownloadResult?> showDownloadOptionsAndQueue(
     maxCount: maxCount,
     random: randomEpisodes,
     includeSpecials: includeSpecials,
+    quality: quality,
   );
 
   return DownloadResult(
@@ -263,6 +326,11 @@ Future<DownloadResult?> showListDownloadOptionsAndQueue(
   final syncChoice = await _showSyncChoiceDialog(context);
   if (syncChoice == null || !context.mounted) return null;
 
+  // Lists can mix media; the quality choice applies to their video leaves
+  // (music tracks always download the original file).
+  final quality = await promptDownloadQuality(context, metadata: rootMetadata);
+  if (quality == null || !context.mounted) return null;
+
   final serverId = rootMetadata.serverId ?? client.serverId;
   final filterString = selectedFilter == DownloadFilter.unwatched ? SyncRuleFilter.unwatched : SyncRuleFilter.all;
 
@@ -290,7 +358,13 @@ Future<DownloadResult?> showListDownloadOptionsAndQueue(
     syncRule = downloadProvider.getSyncRule(ruleKey);
   }
 
-  final count = await downloadProvider.queueListDownload(items, client, filter: selectedFilter, syncRule: syncRule);
+  final count = await downloadProvider.queueListDownload(
+    items,
+    client,
+    filter: selectedFilter,
+    syncRule: syncRule,
+    quality: quality,
+  );
 
   return DownloadResult(
     count: count,

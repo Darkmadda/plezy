@@ -330,6 +330,7 @@ extension DownloadDatabaseOperations on AppDatabase {
     String? grandparentRatingKey,
     int mediaIndex = 0,
     String? mediaSourceId,
+    String? qualityPreset,
     int priority = 0,
     bool downloadSubtitles = true,
     bool downloadArtwork = true,
@@ -347,8 +348,9 @@ extension DownloadDatabaseOperations on AppDatabase {
           grandparent_rating_key,
           status,
           media_index,
-          media_source_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          media_source_id,
+          quality_preset
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(global_key) DO UPDATE SET
           server_id = excluded.server_id,
           client_scope_id = excluded.client_scope_id,
@@ -364,7 +366,8 @@ extension DownloadDatabaseOperations on AppDatabase {
           retry_count = 0,
           bg_task_id = NULL,
           media_index = excluded.media_index,
-          media_source_id = excluded.media_source_id
+          media_source_id = excluded.media_source_id,
+          quality_preset = excluded.quality_preset
         WHERE downloaded_media.status IN (?, ?, ?)
         ''',
         variables: [
@@ -378,6 +381,7 @@ extension DownloadDatabaseOperations on AppDatabase {
           Variable<int>(DownloadStatus.queued.index),
           Variable<int>(mediaIndex),
           Variable<String>(mediaSourceId),
+          Variable<String>(qualityPreset),
           Variable<int>(DownloadStatus.failed.index),
           Variable<int>(DownloadStatus.cancelled.index),
           Variable<int>(DownloadStatus.partial.index),

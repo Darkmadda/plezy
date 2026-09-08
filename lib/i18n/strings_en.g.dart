@@ -621,6 +621,12 @@ class Translations$settings$en {
 	/// en: 'Music Quality'
 	String get musicQualityTitle => 'Music Quality';
 
+	/// en: 'Download Quality'
+	String get downloadQualityTitle => 'Download Quality';
+
+	/// en: 'Smaller files via server transcode'
+	String get downloadQualityDescription => 'Smaller files via server transcode';
+
 	/// en: 'Subtitle Styling'
 	String get subtitleStyling => 'Subtitle Styling';
 
@@ -4041,6 +4047,12 @@ class Translations$downloads$en {
 	/// en: 'Select Version'
 	String get selectVersion => 'Select Version';
 
+	/// en: 'Download Quality'
+	String get selectQuality => 'Download Quality';
+
+	/// en: 'Default — ${quality}'
+	String qualityUseDefault({required Object quality}) => 'Default — ${quality}';
+
 	/// en: 'All episodes'
 	String get allEpisodes => 'All episodes';
 
@@ -6611,6 +6623,8 @@ extension on Translations {
 			'settings.playbackBufferDescription' => 'Buffer more against unstable connections. Also limited by Buffer Size.',
 			'settings.defaultQualityTitle' => 'Default Quality',
 			'settings.musicQualityTitle' => 'Music Quality',
+			'settings.downloadQualityTitle' => 'Download Quality',
+			'settings.downloadQualityDescription' => 'Smaller files via server transcode',
 			'settings.subtitleStyling' => 'Subtitle Styling',
 			'settings.subtitleStylingDescription' => 'Customize subtitle appearance',
 			'settings.smallSkipDuration' => 'Small Skip Duration',
@@ -6952,10 +6966,10 @@ extension on Translations {
 			'mediaMenu.deleteSeasonTitle' => 'Delete this season?',
 			'mediaMenu.deleteShowTitle' => 'Delete this show?',
 			'mediaMenu.deleteMovieTitle' => 'Delete this movie?',
-			'mediaMenu.deleteEpisodeConfirm' => 'Delete episode',
-			'mediaMenu.deleteSeasonConfirm' => 'Delete season',
 			_ => null,
 		} ?? switch (path) {
+			'mediaMenu.deleteEpisodeConfirm' => 'Delete episode',
+			'mediaMenu.deleteSeasonConfirm' => 'Delete season',
 			'mediaMenu.deleteShowConfirm' => 'Delete show',
 			'mediaMenu.deleteMovieConfirm' => 'Delete movie',
 			'mediaMenu.deleteAnyway' => 'Delete anyway',
@@ -7466,10 +7480,10 @@ extension on Translations {
 			'explore.episodeCount' => ({required num n}) => (_root.$meta.cardinalResolver ?? PluralResolvers.cardinal('en'))(n, one: '${n} episode', other: '${n} episodes', ), 
 			'explore.cast' => 'Cast',
 			'explore.characters' => 'Characters',
-			'explore.addToWatchlist' => 'Add to Watchlist',
-			'explore.removeFromWatchlist' => 'Remove from Watchlist',
 			_ => null,
 		} ?? switch (path) {
+			'explore.addToWatchlist' => 'Add to Watchlist',
+			'explore.removeFromWatchlist' => 'Remove from Watchlist',
 			'explore.addedToWatchlist' => 'Added to watchlist',
 			'explore.removedFromWatchlist' => 'Removed from watchlist',
 			'explore.watchlistUpdateFailed' => 'Couldn\'t update watchlist',
@@ -7838,6 +7852,8 @@ extension on Translations {
 			'downloads.resumeAll' => 'Resume all',
 			'downloads.deleteAll' => 'Delete all',
 			'downloads.selectVersion' => 'Select Version',
+			'downloads.selectQuality' => 'Download Quality',
+			'downloads.qualityUseDefault' => ({required Object quality}) => 'Default — ${quality}',
 			'downloads.allEpisodes' => 'All episodes',
 			'downloads.unwatchedOnly' => 'Unwatched only',
 			'downloads.nextNUnwatched' => ({required Object count}) => 'Next ${count} unwatched',
@@ -7978,12 +7994,12 @@ extension on Translations {
 			'companionRemote.remote.playPause' => 'Play/Pause',
 			'companionRemote.remote.next' => 'Next',
 			'companionRemote.remote.seekBack' => 'Seek Back',
+			_ => null,
+		} ?? switch (path) {
 			'companionRemote.remote.stop' => 'Stop',
 			'companionRemote.remote.seekForward' => 'Seek Fwd',
 			'companionRemote.remote.volume' => 'Volume',
 			'companionRemote.remote.volumeDown' => 'Down',
-			_ => null,
-		} ?? switch (path) {
 			'companionRemote.remote.volumeUp' => 'Up',
 			'companionRemote.remote.fullscreen' => 'Fullscreen',
 			'companionRemote.remote.subtitles' => 'Subtitles',

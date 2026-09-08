@@ -41,7 +41,12 @@ mixin _JellyfinImageDownloadMethods on _JellyfinClientInternals {
   }
 
   @override
-  Future<DownloadResolution> resolveDownload(MediaItem item, {int mediaIndex = 0, String? mediaSourceId}) async {
+  Future<DownloadResolution> resolveDownload(
+    MediaItem item, {
+    int mediaIndex = 0,
+    String? mediaSourceId,
+    TranscodeQualityPreset quality = TranscodeQualityPreset.original,
+  }) async {
     final bundle = await fetchPlaybackBundle(item.id, sourceIndex: mediaIndex, sourceId: mediaSourceId);
     final selectedSourceId = bundle?.selectedSourceId;
     final requestedSourceId = mediaSourceId?.trim();
@@ -62,9 +67,30 @@ mixin _JellyfinImageDownloadMethods on _JellyfinClientInternals {
       return DownloadResolution(videoUrl: audioUrl, mediaSourceId: selectedSourceId, externalSubtitles: const []);
     }
 
-    // Direct-stream the selected original file. Jellyfin's `Static=true`
-    // skips the transcoder so the byte-for-byte source lands on disk.
-    final videoUrl = buildDirectStreamUrl(item.id, container: bundle?.container, mediaSourceId: bundle?.pinnedSourceId);
+    // Direct-stream the selected original file (`Static=true` skips the
+    // transcoder so the byte-for-byte source lands on disk) — unless a
+    // quality cap asks for a server-side transcode of the video.
+    final String videoUrl;
+    var isTranscoded = false;
+    String? transcodeSessionId;
+    final videoBitrateKbps = quality.videoBitrateKbps;
+    if (!quality.isOriginal && videoBitrateKbps != null) {
+      final playSessionId = generateSessionIdentifier();
+      videoUrl = buildJellyfinTranscodeDownloadUrl(
+        baseUrl: connection.baseUrl,
+        accessToken: connection.accessToken,
+        deviceId: connection.deviceId,
+        itemId: item.id,
+        playSessionId: playSessionId,
+        videoBitrateKbps: videoBitrateKbps,
+        maxHeight: quality.resolutionHeight,
+        mediaSourceId: bundle?.pinnedSourceId,
+      );
+      isTranscoded = true;
+      transcodeSessionId = playSessionId;
+    } else {
+      videoUrl = buildDirectStreamUrl(item.id, container: bundle?.container, mediaSourceId: bundle?.pinnedSourceId);
+    }
 
     // External subtitle sidecars are listed in the per-source MediaStreams.
     // PlaybackInfo gives us the canonical view including DeliveryUrl when
@@ -82,24 +108,48 @@ mixin _JellyfinImageDownloadMethods on _JellyfinClientInternals {
         error: error,
         stackTrace: stackTrace,
       );
-      return DownloadResolution(videoUrl: videoUrl, mediaSourceId: selectedSourceId, externalSubtitlesResolved: false);
+      return DownloadResolution(
+        videoUrl: videoUrl,
+        mediaSourceId: selectedSourceId,
+        externalSubtitlesResolved: false,
+        isTranscoded: isTranscoded,
+        transcodeSessionId: transcodeSessionId,
+      );
     }
 
     final source = _selectDownloadMediaSource(playbackInfo['MediaSources'] as List, selectedSourceId, mediaIndex);
     if (source == null) {
       appLogger.w('Jellyfin download subtitle enrichment returned no usable source; using the static stream');
-      return DownloadResolution(videoUrl: videoUrl, mediaSourceId: selectedSourceId, externalSubtitlesResolved: false);
+      return DownloadResolution(
+        videoUrl: videoUrl,
+        mediaSourceId: selectedSourceId,
+        externalSubtitlesResolved: false,
+        isTranscoded: isTranscoded,
+        transcodeSessionId: transcodeSessionId,
+      );
     }
     if (source['MediaStreams'] is! List) {
       appLogger.w('Jellyfin download subtitle enrichment returned malformed streams; using the static stream');
-      return DownloadResolution(videoUrl: videoUrl, mediaSourceId: selectedSourceId, externalSubtitlesResolved: false);
+      return DownloadResolution(
+        videoUrl: videoUrl,
+        mediaSourceId: selectedSourceId,
+        externalSubtitlesResolved: false,
+        isTranscoded: isTranscoded,
+        transcodeSessionId: transcodeSessionId,
+      );
     }
 
     final streams = source['MediaStreams'] as List;
     final rawMediaSourceId = source['Id'];
     if (rawMediaSourceId != null && rawMediaSourceId is! String) {
       appLogger.w('Jellyfin download subtitle enrichment returned an invalid source id; using the static stream');
-      return DownloadResolution(videoUrl: videoUrl, mediaSourceId: selectedSourceId, externalSubtitlesResolved: false);
+      return DownloadResolution(
+        videoUrl: videoUrl,
+        mediaSourceId: selectedSourceId,
+        externalSubtitlesResolved: false,
+        isTranscoded: isTranscoded,
+        transcodeSessionId: transcodeSessionId,
+      );
     }
     final subtitleMediaSourceId = rawMediaSourceId as String? ?? item.id;
     for (final raw in streams) {
@@ -129,7 +179,55 @@ mixin _JellyfinImageDownloadMethods on _JellyfinClientInternals {
       );
     }
 
-    return DownloadResolution(videoUrl: videoUrl, mediaSourceId: selectedSourceId, externalSubtitles: subtitles);
+    return DownloadResolution(
+      videoUrl: videoUrl,
+      mediaSourceId: selectedSourceId,
+      externalSubtitles: subtitles,
+      isTranscoded: isTranscoded,
+      transcodeSessionId: transcodeSessionId,
+    );
+  }
+
+  /// Poll `/Sessions` for this device's transcode job. Jellyfin doesn't key
+  /// jobs by PlaySessionId in the sessions payload, so the match is
+  /// device-scoped: the session for our DeviceId that is currently
+  /// transcoding. A concurrent transcode stream from the same device could
+  /// briefly alias the figure — acceptable for a progress bar; the download
+  /// itself is unaffected.
+  @override
+  Future<double?> getTranscodeSessionProgress(String transcodeSessionId) async {
+    try {
+      final response = await _http.get(
+        '/Sessions',
+        queryParameters: {'deviceId': connection.deviceId},
+        timeout: const Duration(seconds: 10),
+      );
+      final sessions = response.data;
+      if (sessions is! List) return null;
+      for (final session in sessions) {
+        if (session is! Map<String, dynamic>) continue;
+        final transcodingInfo = session['TranscodingInfo'];
+        if (transcodingInfo is! Map<String, dynamic>) continue;
+        final pct = flexibleDouble(transcodingInfo['CompletionPercentage']);
+        if (pct != null) return pct;
+      }
+      return null;
+    } catch (e) {
+      appLogger.d('Failed to read Jellyfin transcode progress', error: e);
+      return null;
+    }
+  }
+
+  @override
+  Future<void> stopTranscodeSession(String transcodeSessionId) async {
+    try {
+      await _http.delete(
+        '/Videos/ActiveEncodings',
+        queryParameters: {'deviceId': connection.deviceId, 'playSessionId': transcodeSessionId},
+      );
+    } catch (e) {
+      appLogger.d('Failed to stop Jellyfin transcode session $transcodeSessionId', error: e);
+    }
   }
 
   Map<String, dynamic>? _selectDownloadMediaSource(List<dynamic> sources, String? selectedSourceId, int mediaIndex) {

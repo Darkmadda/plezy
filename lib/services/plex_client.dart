@@ -131,7 +131,28 @@ const _plexHlsSubtitleTranscodeTarget =
 const _plexHlsVodContainer = 'mp4';
 const _plexHlsVodTsContainer = 'mpegts';
 
-String _buildPlexHlsClientProfileExtra({required String videoTranscodeTarget, int? maxVideoBitrateKbps}) {
+/// Quality-capped download target: one continuous MKV stream (`protocol=http`)
+/// the download pipeline saves straight to disk. MKV because a live encode is
+/// written front-to-back — a plain MP4 needs its moov atom finalized, which a
+/// stream cut off mid-transcode never gets. H.264-only encode for the same
+/// device-compatibility reasons as the TS fallback target; audio codecs are
+/// copy-friendly so `directStreamAudio` keeps the source track bits when it
+/// can.
+const _plexHttpDownloadVideoTranscodeTarget =
+    'add-transcode-target(type=videoProfile&context=streaming'
+    '&protocol=http&container=mkv&videoCodec=h264'
+    '&audioCodec=aac%2Cac3%2Ceac3%2Cmp3)';
+const _plexHttpDownloadStartEndpoint = '$_plexVideoTranscodeBaseEndpoint/start.mkv';
+const _plexHttpDownloadContainer = 'mkv';
+
+/// [includeSubtitleTarget] is on for player streams (sidecar tracks convert to
+/// WebVTT) and off for the download profile — download subtitles are fetched
+/// as separate sidecar files, never through the transcode session.
+String _buildPlexHlsClientProfileExtra({
+  required String videoTranscodeTarget,
+  int? maxVideoBitrateKbps,
+  bool includeSubtitleTarget = true,
+}) {
   final clauses = <String>['add-settings(DirectPlayStreamSelection=true)'];
   if (maxVideoBitrateKbps != null) {
     clauses.add(
@@ -139,9 +160,8 @@ String _buildPlexHlsClientProfileExtra({required String videoTranscodeTarget, in
       '&name=video.bitrate&value=$maxVideoBitrateKbps&replace=true)',
     );
   }
-  clauses
-    ..add(videoTranscodeTarget)
-    ..add(_plexHlsSubtitleTranscodeTarget);
+  clauses.add(videoTranscodeTarget);
+  if (includeSubtitleTarget) clauses.add(_plexHlsSubtitleTranscodeTarget);
   return clauses.join('+');
 }
 
@@ -2875,6 +2895,82 @@ class PlexClient
 
   static const String _musicTranscodeStartEndpoint = '/music/:/transcode/universal/start.mp3';
 
+  /// Build a quality-capped download stream URL (decision + progressive start
+  /// path).
+  ///
+  /// Mirrors [buildTranscodeStartPath] with a `protocol=http` single-file MKV
+  /// target instead of segmented HLS. `directStream=1` lets the server copy
+  /// source streams that already fit under the preset's caps (a lossless remux
+  /// honours "at most this quality" without a needless re-encode); the
+  /// profile's bitrate limitation forces heavier sources through the encoder.
+  /// No subtitle burn: download subtitles ride as sidecar files.
+  Future<({String? startPath, TranscodeDecisionOutcome outcome})> buildDownloadTranscodeStartPath({
+    required String ratingKey,
+    required int mediaIndex,
+    int partIndex = 0,
+    required TranscodeQualityPreset preset,
+    required String sessionIdentifier,
+    required String transcodeSessionId,
+  }) async {
+    try {
+      final clientProfileExtra = _buildPlexHlsClientProfileExtra(
+        videoTranscodeTarget: _plexHttpDownloadVideoTranscodeTarget,
+        maxVideoBitrateKbps: preset.videoBitrateKbps,
+        includeSubtitleTarget: false,
+      );
+      final params = <String, String>{
+        'hasMDE': '1',
+        'path': '/library/metadata/$ratingKey',
+        'mediaIndex': mediaIndex.toString(),
+        'partIndex': partIndex.toString(),
+        'protocol': 'http',
+        'directPlay': '0',
+        'directStream': '1',
+        'directStreamAudio': '1',
+        'audioBoost': '100',
+        'location': 'lan',
+        'addDebugOverlay': '0',
+        'autoAdjustQuality': '0',
+        // Resolution/quality caps ride as plain query params for the same
+        // reason as the HLS flow: the bitrate limitation clause alone leaves
+        // a 4K source at 2160p (see [_buildTranscodeParams]).
+        if (preset.videoResolution != null) 'videoResolution': preset.videoResolution!,
+        if (preset.videoQuality != null) 'videoQuality': preset.videoQuality!.toString(),
+        'mediaBufferSize': '102400',
+        'session': transcodeSessionId,
+        'subtitles': 'none',
+        'Accept-Language': 'en',
+        'X-Plex-Session-Identifier': sessionIdentifier,
+        'X-Plex-Client-Profile-Extra': clientProfileExtra,
+        'X-Plex-Features': 'external-media,indirect-media',
+        'X-Plex-Model': 'standalone',
+        'X-Plex-Language': 'en',
+        'X-Plex-Product': config.product,
+        'X-Plex-Version': config.version,
+        'X-Plex-Client-Identifier': config.clientIdentifier,
+        'X-Plex-Platform': _transcodePlatformName(),
+        'X-Plex-Client-Profile-Name': 'Generic',
+        if (config.device != null) 'X-Plex-Device': config.device!,
+        if (config.deviceName != null) 'X-Plex-Device-Name': config.deviceName!,
+        if (config.token != null) 'X-Plex-Token': config.token!,
+      };
+      final result = await _runTranscodeDecision(
+        startEndpoint: _plexHttpDownloadStartEndpoint,
+        allParams: params,
+        isOriginal: preset.isOriginal,
+        requiredContainer: _plexHttpDownloadContainer,
+      );
+      if (!result.containerHonored) {
+        appLogger.w('Download transcode decision did not honour the MKV container; falling back to the original file');
+        return (startPath: null, outcome: TranscodeDecisionOutcome.failed);
+      }
+      return (startPath: result.startPath, outcome: result.outcome);
+    } catch (e, st) {
+      appLogger.e('Failed to build download transcode start path', error: e, stackTrace: st);
+      return (startPath: null, outcome: TranscodeDecisionOutcome.failed);
+    }
+  }
+
   /// Shared decision plumbing for the video and music transcode flows: GET
   /// the sibling `decision` endpoint with the exact start params, parse the
   /// outcome via [_parseTranscodeDecisionOutcome], and hand back the start
@@ -4543,7 +4639,12 @@ class PlexClient
   }
 
   @override
-  Future<DownloadResolution> resolveDownload(MediaItem item, {int mediaIndex = 0, String? mediaSourceId}) async {
+  Future<DownloadResolution> resolveDownload(
+    MediaItem item, {
+    int mediaIndex = 0,
+    String? mediaSourceId,
+    TranscodeQualityPreset quality = TranscodeQualityPreset.original,
+  }) async {
     final playbackData = await getVideoPlaybackData(
       item.id,
       mediaIndex: mediaIndex,
@@ -4573,11 +4674,77 @@ class PlexClient
         );
       }
     }
+
+    var videoUrl = playbackData.videoUrl;
+    var isTranscoded = false;
+    String? transcodeSessionId;
+    final wantsTranscode = !quality.isOriginal && item.kind != MediaKind.track && playbackData.hasValidVideoUrl;
+    if (wantsTranscode && await serverSupportsVideoTranscoding()) {
+      final sessionId = generateSessionIdentifier();
+      final result = await buildDownloadTranscodeStartPath(
+        ratingKey: item.id,
+        mediaIndex: playbackData.selectedMediaIndex,
+        partIndex: playbackData.selectedPartIndex,
+        preset: quality,
+        sessionIdentifier: generateSessionIdentifier(),
+        transcodeSessionId: sessionId,
+      );
+      if (result.outcome == TranscodeDecisionOutcome.transcodeOk && result.startPath != null) {
+        videoUrl = '${config.baseUrl}${result.startPath}'.withPlexToken(config.token);
+        isTranscoded = true;
+        transcodeSessionId = sessionId;
+      } else {
+        // Same posture as streaming: an unavailable transcode degrades to the
+        // original file rather than failing the download.
+        appLogger.w('Plex download transcode unavailable (${result.outcome}); downloading the original file');
+      }
+    }
+
     return DownloadResolution(
-      videoUrl: playbackData.videoUrl,
+      videoUrl: videoUrl,
       mediaSourceId: playbackData.mediaInfo?.mediaSourceId,
       externalSubtitles: subtitles,
+      isTranscoded: isTranscoded,
+      transcodeSessionId: transcodeSessionId,
     );
+  }
+
+  /// Poll `/transcode/sessions` for the download session's progress. Plex
+  /// reports `progress` as percent of media time transcoded, which trails the
+  /// client's byte position by at most `mediaBufferSize` — good enough for a
+  /// progress bar over a Content-Length-less stream.
+  @override
+  Future<double?> getTranscodeSessionProgress(String transcodeSessionId) async {
+    try {
+      final response = await _http.get(
+        '/transcode/sessions',
+        headers: const {'Accept': 'application/json'},
+        timeout: const Duration(seconds: 10),
+      );
+      final container = _getMediaContainer(response);
+      for (final session in flexibleMapList(container?['TranscodeSession'])) {
+        final key = session['key']?.toString();
+        if (key != transcodeSessionId && (key == null || !key.endsWith('/$transcodeSessionId'))) continue;
+        return flexibleDouble(session['progress']);
+      }
+      return null;
+    } catch (e) {
+      appLogger.d('Failed to read Plex transcode session progress', error: e);
+      return null;
+    }
+  }
+
+  @override
+  Future<void> stopTranscodeSession(String transcodeSessionId) async {
+    try {
+      await _http.get(
+        '$_plexVideoTranscodeBaseEndpoint/stop',
+        queryParameters: {'session': transcodeSessionId},
+        timeout: const Duration(seconds: 10),
+      );
+    } catch (e) {
+      appLogger.d('Failed to stop Plex transcode session $transcodeSessionId', error: e);
+    }
   }
 
   @override

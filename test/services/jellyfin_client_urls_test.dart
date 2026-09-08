@@ -17,6 +17,7 @@ import 'package:plezy/media/media_server_client.dart';
 import 'package:plezy/models/transcode_quality_preset.dart';
 import 'package:plezy/mpv/mpv.dart';
 import 'package:plezy/services/jellyfin_client.dart';
+import 'package:plezy/services/jellyfin_playback_urls.dart';
 import 'package:plezy/services/playback_initialization_types.dart';
 import 'package:plezy/services/subtitle_preference.dart';
 import 'package:plezy/utils/device_identity.dart';
@@ -254,6 +255,49 @@ void main() {
     test('buildDirectStreamUrl path-encodes reserved item id characters', () {
       final url = client.buildDirectStreamUrl('folder/item #1?x');
       expect(Uri.parse(url).path, '/Videos/folder%2Fitem%20%231%3Fx/stream');
+    });
+
+    test('buildJellyfinTranscodeDownloadUrl engages the transcoder with quality caps', () {
+      final url = buildJellyfinTranscodeDownloadUrl(
+        baseUrl: 'https://jf.example.com',
+        accessToken: 'tok-abc',
+        deviceId: 'dev-xyz',
+        itemId: 'item-99',
+        playSessionId: 'psid-1',
+        videoBitrateKbps: 2000,
+        maxHeight: 720,
+        mediaSourceId: 'src-2',
+      );
+      final uri = Uri.parse(url);
+
+      // The .mkv path extension picks the container; Static must be absent so
+      // the transcoder engages instead of serving the original bytes.
+      expect(uri.path, '/Videos/item-99/stream.mkv');
+      expect(uri.queryParameters.containsKey('Static'), isFalse);
+      // Presets are kbps, Jellyfin wants bits per second.
+      expect(uri.queryParameters['VideoBitRate'], '2000000');
+      expect(uri.queryParameters['AudioBitRate'], '256000');
+      expect(uri.queryParameters['MaxHeight'], '720');
+      expect(uri.queryParameters['VideoCodec'], 'h264');
+      expect(uri.queryParameters['AudioCodec'], 'aac');
+      expect(uri.queryParameters['PlaySessionId'], 'psid-1');
+      expect(uri.queryParameters['MediaSourceId'], 'src-2');
+      expect(uri.queryParameters['api_key'], 'tok-abc');
+      expect(uri.queryParameters['DeviceId'], 'dev-xyz');
+    });
+
+    test('buildJellyfinTranscodeDownloadUrl omits MaxHeight and MediaSourceId when absent', () {
+      final url = buildJellyfinTranscodeDownloadUrl(
+        baseUrl: 'https://jf.example.com',
+        accessToken: 'tok-abc',
+        deviceId: 'dev-xyz',
+        itemId: 'item-99',
+        playSessionId: 'psid-1',
+        videoBitrateKbps: 4000,
+      );
+      final uri = Uri.parse(url);
+      expect(uri.queryParameters.containsKey('MaxHeight'), isFalse);
+      expect(uri.queryParameters.containsKey('MediaSourceId'), isFalse);
     });
 
     test('buildAudioDirectStreamUrl targets /Audio with the same static-stream contract', () {
@@ -608,6 +652,74 @@ void main() {
         'src-2',
       );
       expect((jsonDecode(playbackInfoBody!) as Map<String, dynamic>)['MediaSourceId'], 'src-2');
+    });
+
+    test('resolveDownload with a quality cap swaps in the transcode URL and keeps sidecar subtitles', () async {
+      final scoped = JellyfinClient.forTesting(
+        connection: _conn(),
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/Users/user-1/Items/item-1') {
+            return jsonResponse({
+              'Id': 'item-1',
+              'Type': 'Movie',
+              'Name': 'Movie',
+              'MediaSources': [
+                {'Id': 'src-1', 'Container': 'mkv', 'MediaStreams': []},
+              ],
+            });
+          }
+          if (request.url.path == '/Items/item-1/PlaybackInfo') {
+            return jsonResponse({
+              'MediaSources': [
+                {
+                  'Id': 'src-1',
+                  'MediaStreams': [
+                    {
+                      'Index': 3,
+                      'Type': 'Subtitle',
+                      'Codec': 'srt',
+                      'Language': 'eng',
+                      'IsExternal': true,
+                      'DeliveryMethod': 'External',
+                      'DeliveryUrl': '/Videos/item-1/src-1/Subtitles/3/Stream.srt',
+                    },
+                  ],
+                },
+              ],
+            });
+          }
+          return http.Response('{}', 404);
+        }),
+      );
+      addTearDown(scoped.close);
+
+      final resolution = await scoped.resolveDownload(
+        testMediaItem(id: 'item-1', backend: MediaBackend.jellyfin, kind: MediaKind.movie, serverId: 'srv-1'),
+        quality: TranscodeQualityPreset.p720_2mbps,
+      );
+
+      expect(resolution.isTranscoded, isTrue);
+      expect(resolution.transcodeSessionId, isNotNull);
+      final uri = Uri.parse(resolution.videoUrl!);
+      expect(uri.path, '/Videos/item-1/stream.mkv');
+      expect(uri.queryParameters['VideoBitRate'], '2000000');
+      expect(uri.queryParameters['MaxHeight'], '720');
+      expect(uri.queryParameters['PlaySessionId'], resolution.transcodeSessionId);
+      // External subtitles remain sidecar downloads, untouched by the transcode.
+      expect(resolution.externalSubtitles, hasLength(1));
+    });
+
+    test('resolveDownload with the original preset keeps the static stream and reports no transcode', () async {
+      final scoped = _clientWithPlaybackInfo((_) async => jsonResponse({'MediaSources': []}));
+      addTearDown(scoped.close);
+
+      final resolution = await scoped.resolveDownload(
+        testMediaItem(id: 'item-1', backend: MediaBackend.jellyfin, kind: MediaKind.movie, serverId: 'srv-1'),
+      );
+
+      expect(resolution.isTranscoded, isFalse);
+      expect(resolution.transcodeSessionId, isNull);
+      expect(Uri.parse(resolution.videoUrl!).queryParameters['Static'], 'true');
     });
 
     test('resolveDownload keeps the static stream after non-authentication enrichment failures', () async {

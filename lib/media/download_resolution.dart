@@ -54,10 +54,22 @@ class DownloadResolution {
   /// supplementary-download queue pending so it can retry enrichment later.
   final bool externalSubtitlesResolved;
 
+  /// Whether [videoUrl] points at a live server-side transcode instead of the
+  /// original file. Transcoded streams are chunked (no Content-Length), so the
+  /// pipeline must not rely on byte-based progress or HTTP range resume.
+  final bool isTranscoded;
+
+  /// Server-side transcode session handle when [isTranscoded] — Plex `session`
+  /// param, Jellyfin `PlaySessionId`. Used to poll transcode progress and to
+  /// stop the session when the download ends.
+  final String? transcodeSessionId;
+
   const DownloadResolution({
     required this.videoUrl,
     this.mediaSourceId,
     this.externalSubtitles = const [],
     this.externalSubtitlesResolved = true,
+    this.isTranscoded = false,
+    this.transcodeSessionId,
   });
 }

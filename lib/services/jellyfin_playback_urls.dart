@@ -27,6 +27,40 @@ String buildJellyfinDirectStreamUrl({
   return '$baseUrl/$mediaSegment/$encodedItem/stream?${_encodeQuery(params)}';
 }
 
+/// Quality-capped download URL: `/Videos/{id}/stream.mkv` with the transcoder
+/// engaged (no `Static=true`). The `.mkv` path extension picks the container —
+/// MKV because a live encode is written front-to-back and never gets a
+/// finalized MP4 moov atom. Jellyfin honours `AllowVideoStreamCopy` (default
+/// true), so a source already inside the caps is losslessly remuxed instead
+/// of re-encoded. [playSessionId] keys the server-side transcode job for
+/// progress polling and `/Videos/ActiveEncodings` cleanup.
+String buildJellyfinTranscodeDownloadUrl({
+  required String baseUrl,
+  required String accessToken,
+  required String deviceId,
+  required String itemId,
+  required String playSessionId,
+  required int videoBitrateKbps,
+  int? maxHeight,
+  String? mediaSourceId,
+}) {
+  final params = <String, String>{
+    'api_key': accessToken,
+    'DeviceId': deviceId,
+    'PlaySessionId': playSessionId,
+    'MediaSourceId': ?mediaSourceId,
+    'VideoCodec': 'h264',
+    'AudioCodec': 'aac',
+    // Jellyfin bitrates are bits per second (presets are kbps); the audio
+    // figure matches the estimate allowance in download_size_estimator.dart.
+    'VideoBitRate': '${videoBitrateKbps * 1000}',
+    'AudioBitRate': '256000',
+    'MaxHeight': ?maxHeight?.toString(),
+  };
+  final encodedItem = Uri.encodeComponent(itemId);
+  return '$baseUrl/Videos/$encodedItem/stream.mkv?${_encodeQuery(params)}';
+}
+
 String buildJellyfinTrickplayTileUrl({
   required String baseUrl,
   required String accessToken,

@@ -22,6 +22,7 @@ import 'package:plezy/media/media_kind.dart';
 import 'package:plezy/media/media_source_info.dart';
 import 'package:plezy/media/media_server_client.dart';
 import 'package:plezy/models/download_models.dart';
+import 'package:plezy/models/transcode_quality_preset.dart';
 import 'package:plezy/services/download_artwork_helpers.dart';
 import 'package:plezy/services/download_artwork_service.dart';
 import 'package:plezy/services/download_manager_service.dart';
@@ -2321,7 +2322,12 @@ class _SupplementaryClient implements MediaServerClient {
   Future<MediaItem?> fetchItem(String id) async => id == metadata.id ? metadata : null;
 
   @override
-  Future<DownloadResolution> resolveDownload(MediaItem item, {int mediaIndex = 0, String? mediaSourceId}) async {
+  Future<DownloadResolution> resolveDownload(
+    MediaItem item, {
+    int mediaIndex = 0,
+    String? mediaSourceId,
+    TranscodeQualityPreset quality = TranscodeQualityPreset.original,
+  }) async {
     lastMediaSourceId = mediaSourceId;
     return resolution();
   }

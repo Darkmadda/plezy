@@ -1,6 +1,7 @@
 import '../exceptions/media_server_exceptions.dart';
 import '../media/media_source_info.dart';
 import '../media/media_sort.dart';
+import '../models/transcode_quality_preset.dart';
 import '../services/api_cache.dart';
 import '../services/playback_initialization_types.dart';
 import '../utils/app_logger.dart';
@@ -770,10 +771,35 @@ abstract class MediaServerClient {
   ///
   /// [mediaIndex] selects among multiple media versions when an item has them.
   ///
+  /// A non-original [quality] asks the server for a bitrate/resolution-capped
+  /// transcode of the video file instead of the original bytes (audio-only
+  /// items ignore it). Backends fall back to the original file when the
+  /// server cannot transcode; callers learn which happened from
+  /// [DownloadResolution.isTranscoded].
+  ///
   /// A successful applicable response may contain no URL. Request,
   /// cancellation, and malformed-payload failures throw rather than returning
   /// a partial resolution.
-  Future<DownloadResolution> resolveDownload(MediaItem item, {int mediaIndex = 0, String? mediaSourceId});
+  Future<DownloadResolution> resolveDownload(
+    MediaItem item, {
+    int mediaIndex = 0,
+    String? mediaSourceId,
+    TranscodeQualityPreset quality = TranscodeQualityPreset.original,
+  });
+
+  /// Server-reported progress (0–100) of the transcode session backing a
+  /// quality-capped download, or null when the backend can't report it (the
+  /// session is unknown, already reaped, or the endpoint failed). Progress is
+  /// measured in media time transcoded; the client download trails it by at
+  /// most the server's stream buffer, so it is a faithful progress proxy for
+  /// a chunked stream that carries no Content-Length. Never throws.
+  Future<double?> getTranscodeSessionProgress(String transcodeSessionId) async => null;
+
+  /// Best-effort: tell the server to stop the transcode session backing a
+  /// finished or abandoned quality-capped download so it releases the
+  /// transcode slot immediately instead of waiting for a timeout. Never
+  /// throws.
+  Future<void> stopTranscodeSession(String transcodeSessionId) async {}
 
   /// The artwork files the download pipeline should persist for [item] so
   /// the offline UI can render its poster, clear logo, and background art.
