@@ -437,6 +437,8 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
           downloadedBytes: item.downloadedBytes,
           totalBytes: item.totalBytes ?? 0,
           errorMessage: item.errorMessage,
+          // A null DB column means the original file by design.
+          qualityPreset: item.qualityPreset ?? TranscodeQualityPreset.original.name,
         );
 
         _artworkPaths[item.globalKey] = DownloadedArtwork(thumbPath: item.thumbPath);
@@ -544,13 +546,18 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
         };
     // Terminal status-only events omit byte fields. Preserve only those omitted
     // counters; live progress and explicit retry resets must remain authoritative.
-    final merged = terminalUpdateOmittedBytes
+    var merged = terminalUpdateOmittedBytes
         ? progress.copyWith(
             progress: progress.progress == 0 ? previous.progress : progress.progress,
             downloadedBytes: previous.downloadedBytes,
             totalBytes: progress.totalBytes == 0 ? previous.totalBytes : progress.totalBytes,
           )
         : progress;
+    // Most events don't know the row's quality preset (null = unknown, see
+    // [DownloadProgress.qualityPreset]) — carry the last known value forward.
+    if (merged.qualityPreset == null && previous?.qualityPreset != null) {
+      merged = merged.copyWith(qualityPreset: previous!.qualityPreset);
+    }
     _downloads[progress.globalKey] = merged;
 
     // Sync artwork paths when they are available.

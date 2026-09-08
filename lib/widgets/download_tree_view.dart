@@ -8,8 +8,11 @@ import '../media/media_item.dart';
 import '../media/media_item_types.dart';
 import '../media/media_kind.dart';
 import '../models/download_models.dart';
+import '../models/transcode_quality_preset.dart';
 import '../utils/dialogs.dart';
+import '../utils/formatters.dart';
 import '../utils/global_key_utils.dart';
+import '../utils/quality_preset_labels.dart';
 import '../mixins/unsuppress_focus_mixin.dart';
 import 'download_status_icon.dart';
 
@@ -46,6 +49,19 @@ class DownloadTreeNode {
 
 /// Type of node in the download tree
 enum DownloadNodeType { show, season, episode, movie, album, track }
+
+/// "1.2 GB · 720p 2 Mbps" for a completed leaf row, or whichever half is
+/// known. Null when neither the size nor the quality is available.
+@visibleForTesting
+String? downloadLeafDetailLine(DownloadProgress? downloadProgress) {
+  if (downloadProgress == null) return null;
+  final parts = <String>[
+    if (downloadProgress.totalBytes > 0) ByteFormatter.formatBytes(downloadProgress.totalBytes),
+    if (downloadProgress.qualityPreset != null)
+      qualityPresetLabel(TranscodeQualityPreset.fromName(downloadProgress.qualityPreset)),
+  ];
+  return parts.isEmpty ? null : parts.join(' · ');
+}
 
 /// Hierarchical tree view for downloads
 /// Groups TV shows by show -> season -> episode and music by album -> track
@@ -687,6 +703,16 @@ class _DownloadTreeItemState extends State<_DownloadTreeItem> {
                 ),
               ],
 
+              // Completed leaves: on-disk size and the quality the download
+              // was requested at (Original, or the transcode preset).
+              if (!canExpand && _effectiveStatus == DownloadStatus.completed && _leafDetailLine() != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  _leafDetailLine()!,
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+                ),
+              ],
+
               // Progress bar for active downloads
               if (_effectiveStatus == DownloadStatus.downloading) ...[
                 const SizedBox(height: 8),
@@ -736,6 +762,8 @@ class _DownloadTreeItemState extends State<_DownloadTreeItem> {
     final completed = widget.node.completedChildrenCount;
     return t.downloads.completedOfTotal(completed: completed, total: total);
   }
+
+  String? _leafDetailLine() => downloadLeafDetailLine(widget.node.downloadProgress);
 
   /// The actions this row offers, in render order. Single source of truth:
   /// both the button widgets and the focus nodes sizing come from this list,

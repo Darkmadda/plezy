@@ -29,6 +29,11 @@ sealed class DownloadProgress with _$DownloadProgress {
     String? errorMessage,
     String? currentFile,
     String? thumbPath,
+
+    /// `TranscodeQualityPreset` name this download was requested at
+    /// ('original' for the untouched file). Null means the emitting event
+    /// doesn't know — consumers carry the previous value forward.
+    String? qualityPreset,
   }) = _DownloadProgress;
 
   double get progressPercent => progress / 100.0;
