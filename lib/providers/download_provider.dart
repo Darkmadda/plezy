@@ -460,6 +460,11 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
         'and ${_syncRules.length} sync rules',
       );
       safeNotifyListeners();
+
+      // Repair rows whose byte totals never got persisted (downloads that
+      // completed faster than the debounced progress write). Fire-and-forget:
+      // each repaired row lands through the normal progress stream.
+      unawaited(_downloadManager.backfillMissingDownloadSizes());
     } catch (e) {
       appLogger.e('Failed to load persisted downloads', error: e);
     }
