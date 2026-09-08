@@ -63,6 +63,11 @@ class DownloadedMedia extends Table {
   TextColumn get bgTaskId => text().nullable()();
   IntColumn get mediaIndex => integer().withDefault(const Constant(0))();
   TextColumn get mediaSourceId => text().nullable()();
+
+  /// `TranscodeQualityPreset` name requested for this download; null means
+  /// the original file. Persisted so retries re-resolve at the same quality
+  /// and the downloads UI can label quality-capped items.
+  TextColumn get qualityPreset => text().nullable()();
 }
 
 /// Profile ownership for shared physical downloads.

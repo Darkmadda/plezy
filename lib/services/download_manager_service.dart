@@ -27,7 +27,9 @@ import 'settings_service.dart';
 import 'saf_storage_service.dart';
 import 'package:saf_util/saf_util_platform_interface.dart' show SafDocumentFile;
 import '../models/download_models.dart';
+import '../models/transcode_quality_preset.dart';
 import '../services/offline_mode_source.dart';
+import '../utils/download_size_estimator.dart';
 import '../services/download_storage_service.dart';
 import '../i18n/strings.g.dart';
 import '../utils/app_logger.dart';
@@ -119,6 +121,11 @@ class _DownloadContext {
   final String? safRootUri;
   final List<DownloadSubtitleSpec>? subtitles;
 
+  /// The video URL is a live server-side transcode (quality-capped download):
+  /// byte totals are estimates and the completed file must be stat-ed for its
+  /// real size.
+  final bool isTranscoded;
+
   _DownloadContext({
     required this.metadata,
     required this.queueItem,
@@ -129,6 +136,7 @@ class _DownloadContext {
     this.safRootUri,
     this.isSafMode = false,
     this.subtitles,
+    this.isTranscoded = false,
   });
 }
 
@@ -204,6 +212,17 @@ class DownloadManagerService {
   // App-level auto-retry timers for downloads that exhausted native retries.
   // Keyed by globalKey; each timer fires a fresh re-enqueue after a delay.
   final Map<String, Timer> _autoRetryTimers = {};
+
+  /// Progress pollers for quality-capped (transcoded) downloads — see
+  /// [_startTranscodeProgressPoller].
+  final Map<String, Timer> _transcodeProgressPollers = {};
+
+  /// Client + server session handle for each active transcoded download, used
+  /// by the progress poller and for terminal cleanup. In-memory only: after an
+  /// app restart the server reaps abandoned sessions on its own timeout.
+  final Map<String, ({MediaServerClient client, String sessionId})> _activeTranscodeSessions = {};
+
+  static const _transcodeProgressPollInterval = Duration(seconds: 5);
   final Duration _autoRetryDelay;
 
   // Circuit breaker: consecutive instant failures in _processQueue.
@@ -1542,11 +1561,80 @@ class DownloadManagerService {
     }
   }
 
-  /// Cancel any per-download timers (progress debounce + auto-retry) for [key].
-  /// Idempotent; safe to call from any terminal/pause path.
+  /// Cancel any per-download timers (progress debounce, auto-retry, transcode
+  /// progress poller) for [key] and release any server transcode session
+  /// backing it. Idempotent; safe to call from any terminal/pause path — every
+  /// such path ends the network stream, at which point the server session has
+  /// no consumer left.
   void _cancelDownloadTimers(String key) {
     _progressDebounceTimers.remove(key)?.cancel();
     _autoRetryTimers.remove(key)?.cancel();
+    _stopTranscodeSession(key);
+  }
+
+  /// Stop the transcode progress poller and (best-effort) tell the server to
+  /// reap the session so it releases its transcode slot immediately. No-op
+  /// for direct downloads.
+  void _stopTranscodeSession(String key) {
+    _transcodeProgressPollers.remove(key)?.cancel();
+    final session = _activeTranscodeSessions.remove(key);
+    if (session == null) return;
+    unawaited(session.client.stopTranscodeSession(session.sessionId));
+  }
+
+  /// Poll the server's transcode session for progress and republish it as
+  /// download progress. A live transcode stream carries no Content-Length, so
+  /// background_downloader emits no progress events for it — the server's
+  /// media-time percentage is the only progress signal there is. Byte figures
+  /// are derived from [estimatedTotalBytes] and capped at 99% until the
+  /// stream actually completes.
+  void _startTranscodeProgressPoller(String globalKey, {required int? estimatedTotalBytes}) {
+    _transcodeProgressPollers.remove(globalKey)?.cancel();
+    var polling = false;
+    _transcodeProgressPollers[globalKey] = Timer.periodic(_transcodeProgressPollInterval, (_) {
+      if (polling) return;
+      polling = true;
+      unawaited(
+        _pollTranscodeProgress(globalKey, estimatedTotalBytes: estimatedTotalBytes)
+            .catchError((Object e) {
+              appLogger.d('Transcode progress poll failed for $globalKey', error: e);
+            })
+            .whenComplete(() => polling = false),
+      );
+    });
+  }
+
+  Future<void> _pollTranscodeProgress(String globalKey, {required int? estimatedTotalBytes}) async {
+    if (_disposed || _pausingKeys.contains(globalKey) || _cancellingKeys.contains(globalKey)) return;
+    final session = _activeTranscodeSessions[globalKey];
+    if (session == null) {
+      _transcodeProgressPollers.remove(globalKey)?.cancel();
+      return;
+    }
+    final row = await _database.getDownloadedMedia(globalKey);
+    if (row == null || row.status != DownloadStatus.downloading.index) {
+      _transcodeProgressPollers.remove(globalKey)?.cancel();
+      return;
+    }
+    final pct = await session.client.getTranscodeSessionProgress(session.sessionId);
+    if (pct == null || _disposed) return;
+    // The transcoder finishing (100%) is not the download finishing — the
+    // client may still be draining the stream. Completion is only ever
+    // declared by the background_downloader status event.
+    final clamped = pct.clamp(0.0, 99.0);
+    final total = estimatedTotalBytes ?? 0;
+    final downloadedBytes = total > 0 ? (total * clamped / 100).round() : 0;
+    _progressController.add(
+      DownloadProgress(
+        globalKey: globalKey,
+        status: DownloadStatus.downloading,
+        progress: clamped.round(),
+        downloadedBytes: downloadedBytes,
+        totalBytes: total,
+        currentFile: 'video',
+      ),
+    );
+    await _database.updateDownloadProgress(globalKey, clamped.round(), downloadedBytes, total);
   }
 
   /// Delete a file if it exists and log the deletion
@@ -1652,11 +1740,24 @@ class DownloadManagerService {
     bool downloadSubtitles = true,
     bool downloadArtwork = true,
     int mediaIndex = 0,
+    TranscodeQualityPreset? quality,
   }) async {
     if (_skipDownloadsUnsupported('queue download')) return;
     _resumeQueueAfterStorageFailure('new download');
 
     final globalKey = metadata.globalKey;
+
+    // Null quality means "use the global download-quality setting" so every
+    // path without its own picker (sync rules, auto-downloads) follows it.
+    // Quality caps are video-shaped; tracks and other non-video kinds always
+    // fetch the original file.
+    final isVideo = metadata.isMovie || metadata.isEpisode;
+    final TranscodeQualityPreset effectiveQuality;
+    if (!isVideo) {
+      effectiveQuality = TranscodeQualityPreset.original;
+    } else {
+      effectiveQuality = quality ?? (await SettingsService.getInstance()).read(SettingsService.downloadQualityPreset);
+    }
 
     final outcome = await _database.insertQueuedDownload(
       serverId: ServerId(metadata.serverId!),
@@ -1668,6 +1769,7 @@ class DownloadManagerService {
       grandparentRatingKey: metadata.grandparentId,
       mediaIndex: mediaIndex,
       mediaSourceId: _mediaSourceIdForIndex(metadata, mediaIndex),
+      qualityPreset: effectiveQuality.isOriginal ? null : effectiveQuality.name,
       priority: priority,
       downloadSubtitles: downloadSubtitles,
       downloadArtwork: downloadArtwork,
@@ -1744,6 +1846,7 @@ class DownloadManagerService {
 
   /// Cancel any lingering background task and reset progress before re-enqueuing.
   Future<void> _cleanupStaleDownload(String globalKey) async {
+    _stopTranscodeSession(globalKey);
     final existingTaskId = await _database.getBgTaskId(globalKey);
     await _database.updateBgTaskId(globalKey, null);
     _pendingDownloadContext.remove(globalKey);
@@ -1908,10 +2011,12 @@ class DownloadManagerService {
       }
 
       final selectedMediaIndex = existing.mediaIndex;
+      final qualityPreset = TranscodeQualityPreset.fromName(existing.qualityPreset);
       var resolution = await client.resolveDownload(
         metadata,
         mediaIndex: selectedMediaIndex,
         mediaSourceId: existing.mediaSourceId,
+        quality: qualityPreset,
       );
       if (resolution.videoUrl == null) {
         // Cache miss for the per-version fields — refresh from network.
@@ -1922,6 +2027,7 @@ class DownloadManagerService {
           metadata,
           mediaIndex: selectedMediaIndex,
           mediaSourceId: existing.mediaSourceId,
+          quality: qualityPreset,
         );
         if (resolution.videoUrl == null) throw Exception('Could not get video URL for $globalKey');
       }
@@ -1956,6 +2062,17 @@ class DownloadManagerService {
       final settings = await SettingsService.getInstance();
       final requiresWiFi = settings.read(SettingsService.downloadOnWifiOnly);
       final MediaItem resolvedMetadata = metadata;
+
+      // A live transcode stream has no Content-Length: seed the byte total
+      // with a bitrate×duration estimate so the UI and the free-space check
+      // have a figure to work against. The completion handler replaces it
+      // with the real file size.
+      final estimatedTranscodeBytes = resolution.isTranscoded
+          ? estimateTranscodedDownloadBytes(preset: qualityPreset, durationMs: metadata.durationMs)
+          : null;
+      if (estimatedTranscodeBytes != null) {
+        await _database.updateDownloadProgress(globalKey, 0, 0, estimatedTranscodeBytes);
+      }
 
       await _serializeSafOwnership(() async {
         if (_queueBlockedByStorageFailure) return true;
@@ -1999,7 +2116,9 @@ class DownloadManagerService {
         } else {
           await _replaceDownloadSafRootClaim(globalKey, null);
 
-          // Normal mode: use DownloadTask with pause/resume support.
+          // Normal mode: use DownloadTask with pause/resume support (a live
+          // transcode stream can't range-resume, so transcoded downloads
+          // disable pause and restart from scratch instead).
           final String downloadFilePath;
           if (metadata.isMovie) {
             downloadFilePath = await _storageService.getMovieVideoPath(metadata, ext);
@@ -2029,7 +2148,7 @@ class DownloadManagerService {
             updates: Updates.statusAndProgress,
             requiresWiFi: requiresWiFi,
             retries: _nativeRetries,
-            allowPause: true,
+            allowPause: !resolution.isTranscoded,
             metaData: globalKey,
             displayName: displayName,
           );
@@ -2047,9 +2166,16 @@ class DownloadManagerService {
           isSafMode: safRootUri != null,
           safRootUri: safRootUri,
           subtitles: resolution.externalSubtitlesResolved ? resolution.externalSubtitles : null,
+          isTranscoded: resolution.isTranscoded,
         );
 
-        return _enqueuePreparedTask(globalKey, task, safRootUri != null ? 'SAF download' : 'download');
+        final enqueued = await _enqueuePreparedTask(globalKey, task, safRootUri != null ? 'SAF download' : 'download');
+        final transcodeSessionId = resolution.transcodeSessionId;
+        if (enqueued && resolution.isTranscoded && transcodeSessionId != null) {
+          _activeTranscodeSessions[globalKey] = (client: client, sessionId: transcodeSessionId);
+          _startTranscodeProgressPoller(globalKey, estimatedTotalBytes: estimatedTranscodeBytes);
+        }
+        return enqueued;
       });
       return true;
     } catch (e, st) {
@@ -2518,6 +2644,17 @@ class DownloadManagerService {
 
       await _database.updateVideoFilePath(globalKey, storedPath);
       appLogger.d('Video download completed for $globalKey');
+
+      // Transcoded downloads carried only a byte estimate (chunked stream, no
+      // progress events) — replace it with the real on-disk size now.
+      if (ctx != null && ctx.isTranscoded && !ctx.isSafMode) {
+        try {
+          final actualBytes = await File(ctx.filePath).length();
+          await _database.updateDownloadProgress(globalKey, 100, actualBytes, actualBytes);
+        } catch (e) {
+          appLogger.w('Failed to stat completed transcoded download for $globalKey', error: e);
+        }
+      }
 
       // ── Phase 2 (best-effort): supplementary downloads ──
       final persistedQueueItem = await (_database.select(
@@ -3777,6 +3914,11 @@ class DownloadManagerService {
       timer.cancel();
     }
     _autoRetryTimers.clear();
+    for (final timer in _transcodeProgressPollers.values) {
+      timer.cancel();
+    }
+    _transcodeProgressPollers.clear();
+    _activeTranscodeSessions.clear();
     _pendingDownloadContext.clear();
     _completingKeys.clear();
     _pausingKeys.clear();

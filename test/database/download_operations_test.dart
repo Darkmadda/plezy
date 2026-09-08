@@ -39,6 +39,7 @@ void main() {
           grandparentRatingKey: 'show-1',
           mediaIndex: 3,
           mediaSourceId: 'source-3',
+          qualityPreset: 'p720_2mbps',
           priority: 7,
           downloadSubtitles: false,
           downloadArtwork: true,
@@ -57,6 +58,7 @@ void main() {
         expect(media.status, DownloadStatus.queued.index);
         expect(media.mediaIndex, 3);
         expect(media.mediaSourceId, 'source-3');
+        expect(media.qualityPreset, 'p720_2mbps');
         expect(queued.mediaGlobalKey, media.globalKey);
         expect(queued.priority, 7);
         expect(queued.downloadSubtitles, isFalse);
@@ -109,6 +111,7 @@ void main() {
         grandparentRatingKey: 'show-new',
         mediaIndex: 9,
         mediaSourceId: 'source-new',
+        qualityPreset: 'p480_1_5mbps',
         priority: 4,
         downloadSubtitles: false,
         downloadArtwork: false,
@@ -125,6 +128,7 @@ void main() {
       expect(requeued.grandparentRatingKey, 'show-new');
       expect(requeued.mediaIndex, 9);
       expect(requeued.mediaSourceId, 'source-new');
+      expect(requeued.qualityPreset, 'p480_1_5mbps');
       expect(requeued.status, DownloadStatus.queued.index);
       expect(requeued.progress, 0);
       expect(requeued.downloadedBytes, 0);

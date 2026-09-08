@@ -535,9 +535,15 @@ extension _MediaDetailActionButtons on _MediaDetailScreenState {
     final versionConfig = await _resolveDownloadVersion(context, metadata, client);
     if (versionConfig == null || !mounted) return;
 
+    TranscodeQualityPreset? quality;
+    if (metadata.isMovie || metadata.isEpisode) {
+      quality = await promptDownloadQuality(context, metadata: metadata, mediaIndex: versionConfig.mediaIndex);
+      if (quality == null || !mounted) return;
+    }
+
     await downloadProvider.deleteDownload(globalKey);
     try {
-      await downloadProvider.queueDownload(metadata, client, versionConfig: versionConfig);
+      await downloadProvider.queueDownload(metadata, client, versionConfig: versionConfig, quality: quality);
       if (mounted) showSuccessSnackBar(context, t.downloads.downloadQueued);
     } on CellularDownloadBlockedException {
       if (mounted) showErrorSnackBar(context, t.settings.cellularDownloadBlocked);
@@ -602,7 +608,15 @@ extension _MediaDetailActionButtons on _MediaDetailScreenState {
       final versionConfig = await _resolveDownloadVersion(context, metadata, client);
       if (versionConfig == null || !mounted) return;
 
-      final count = await downloadProvider.queueMissingEpisodes(metadata, client, versionConfig: versionConfig);
+      final quality = await promptDownloadQuality(context, metadata: metadata, mediaIndex: versionConfig.mediaIndex);
+      if (quality == null || !mounted) return;
+
+      final count = await downloadProvider.queueMissingEpisodes(
+        metadata,
+        client,
+        versionConfig: versionConfig,
+        quality: quality,
+      );
       if (mounted) {
         final message = count > 0 ? t.downloads.episodesQueued(count: count) : t.downloads.allEpisodesAlreadyDownloaded;
         showAppSnackBar(context, message);

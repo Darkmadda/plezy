@@ -468,6 +468,17 @@ class SettingsService extends BaseSharedPreferencesService {
     values: TranscodeQualityPreset.values,
     defaultValue: TranscodeQualityPreset.original,
   );
+
+  /// Default quality for new video downloads. Non-original values ask the
+  /// server for a bitrate/resolution-capped transcode so more fits on
+  /// storage-limited devices; per-download pickers pre-select this and can
+  /// override it. Read at enqueue time by every download path (dialogs,
+  /// sync rules, auto-downloads).
+  static const downloadQualityPreset = EnumPref<TranscodeQualityPreset>(
+    'download_quality_preset',
+    values: TranscodeQualityPreset.values,
+    defaultValue: TranscodeQualityPreset.original,
+  );
   static const musicQualityPreset = EnumPref<AudioQualityPreset>(
     'music_quality_preset',
     values: AudioQualityPreset.values,
@@ -1079,6 +1090,7 @@ class SettingsService extends BaseSharedPreferencesService {
     creditsPattern,
     autoRemoveWatchedDownloads,
     defaultQualityPreset,
+    downloadQualityPreset,
     musicQualityPreset,
     liveTvDefaultFavorites,
     matchRefreshRate,

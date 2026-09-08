@@ -55,6 +55,7 @@ import '../utils/content_utils.dart';
 import '../models/download_models.dart';
 import '../services/download_storage_service.dart';
 import '../utils/download_version_utils.dart';
+import '../models/transcode_quality_preset.dart';
 import '../utils/download_utils.dart';
 import '../services/settings_service.dart';
 import '../services/watch_actions.dart';

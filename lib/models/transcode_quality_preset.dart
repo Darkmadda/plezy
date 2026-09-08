@@ -33,6 +33,11 @@ enum TranscodeQualityPreset {
     return int.tryParse(parts[1]);
   }
 
+  /// Parse a persisted enum [name] (e.g. the downloads table's
+  /// `qualityPreset` column), falling back to [original] for null or unknown
+  /// values such as a preset renamed across app versions.
+  static TranscodeQualityPreset fromName(String? name) => name == null ? original : (values.asNameMap()[name] ?? original);
+
   /// Order shared by every picker surface so they can't drift apart:
   /// [original] pinned first, then transcode presets highest-bitrate first.
   static final List<TranscodeQualityPreset> displayOrder = List.unmodifiable([
