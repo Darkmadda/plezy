@@ -1789,7 +1789,10 @@ class DownloadManagerService {
       }
     }
 
-    _emitProgress(globalKey, DownloadStatus.queued, 0);
+    // Carry the resolved preset so the UI can label the row without another
+    // DB read; 'original' is explicit — null would read as "unknown" and
+    // make consumers keep a stale previous value.
+    _emitProgress(globalKey, DownloadStatus.queued, 0, qualityPreset: effectiveQuality.name);
     unawaited(_processQueue(client));
   }
 
@@ -2976,6 +2979,7 @@ class DownloadManagerService {
     int progress, {
     String? errorMessage,
     String? currentFile,
+    String? qualityPreset,
   }) {
     if (_disposed) return;
     _progressController.add(
@@ -2985,6 +2989,7 @@ class DownloadManagerService {
         progress: progress,
         errorMessage: errorMessage,
         currentFile: currentFile,
+        qualityPreset: qualityPreset,
       ),
     );
   }

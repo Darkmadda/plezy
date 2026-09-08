@@ -134,4 +134,35 @@ void main() {
       expect(resolveDownloadContainerGlobalKey(show, metadata), 'plex1:42');
     });
   });
+
+  group('downloadLeafDetailLine', () {
+    DownloadProgress progress({int totalBytes = 0, String? qualityPreset}) => DownloadProgress(
+      globalKey: 'srv:1',
+      status: DownloadStatus.completed,
+      totalBytes: totalBytes,
+      qualityPreset: qualityPreset,
+    );
+
+    test('joins size and quality label', () {
+      final line = downloadLeafDetailLine(progress(totalBytes: 1288490189, qualityPreset: 'p720_2mbps'));
+      expect(line, contains('1.20 GB'));
+      expect(line, contains('·'));
+      expect(line, contains('720p'));
+    });
+
+    test('an original download is labelled Original', () {
+      expect(downloadLeafDetailLine(progress(totalBytes: 1000, qualityPreset: 'original')), contains('Original'));
+    });
+
+    test('degrades to whichever half is known', () {
+      expect(downloadLeafDetailLine(progress(totalBytes: 2048)), isNot(contains('·')));
+      expect(downloadLeafDetailLine(progress(qualityPreset: 'original')), 'Original');
+      expect(downloadLeafDetailLine(progress()), isNull);
+      expect(downloadLeafDetailLine(null), isNull);
+    });
+
+    test('unknown preset names fall back to Original rather than crashing', () {
+      expect(downloadLeafDetailLine(progress(qualityPreset: 'p999_removed')), 'Original');
+    });
+  });
 }
