@@ -2648,16 +2648,14 @@ class DownloadManagerService {
       await _database.updateVideoFilePath(globalKey, storedPath);
       appLogger.d('Video download completed for $globalKey');
 
-      // Transcoded downloads carried only a byte estimate (chunked stream, no
-      // progress events) — replace it with the real on-disk size now.
-      if (ctx != null && ctx.isTranscoded && !ctx.isSafMode) {
-        try {
-          final actualBytes = await File(ctx.filePath).length();
-          await _database.updateDownloadProgress(globalKey, 100, actualBytes, actualBytes);
-        } catch (e) {
-          appLogger.w('Failed to stat completed transcoded download for $globalKey', error: e);
-        }
-      }
+      // Persist the real on-disk size for every completed download. The
+      // debounced progress write is cancelled above, and a fast download can
+      // finish before background_downloader emits a single progress event —
+      // either way the row would keep no byte totals (a transcoded download
+      // additionally only ever carried an estimate). SAF URIs are skipped:
+      // there is no stat-by-URI operation, and UriDownloadTask progress
+      // events already persisted totals for them when available.
+      await _finalizeCompletedDownloadSize(globalKey, storedPath);
 
       // ── Phase 2 (best-effort): supplementary downloads ──
       final persistedQueueItem = await (_database.select(
@@ -2728,6 +2726,78 @@ class DownloadManagerService {
       // Always advance the queue, even after errors
       final nextClient = await _getClientForDownloadKey(globalKey);
       if (nextClient != null) unawaited(_processQueue(nextClient));
+    }
+  }
+
+  /// Stat the completed video file and store its size as the row's byte
+  /// totals, emitting a progress event so the open downloads UI updates
+  /// without a restart. Runs before the completed transition, so the event
+  /// carries the still-current downloading status and the terminal event's
+  /// byte-preserving merge keeps the figures.
+  Future<void> _finalizeCompletedDownloadSize(String globalKey, String storedPath) async {
+    if (_storageService.isSafUri(storedPath)) return;
+    try {
+      final readablePath = await _storageService.getReadablePath(storedPath);
+      final size = await File(readablePath).length();
+      if (size <= 0) return;
+      await _database.updateDownloadProgress(globalKey, 100, size, size);
+      if (_disposed) return;
+      _progressController.add(
+        DownloadProgress(
+          globalKey: globalKey,
+          status: DownloadStatus.downloading,
+          progress: 100,
+          downloadedBytes: size,
+          totalBytes: size,
+          currentFile: 'video',
+        ),
+      );
+    } catch (e) {
+      appLogger.w('Failed to stat completed download for $globalKey', error: e);
+    }
+  }
+
+  /// Repair pass for completed rows with no byte totals — downloads finished
+  /// before [_finalizeCompletedDownloadSize] existed, or so fast that no
+  /// debounced progress write ever landed. Stats each row's file and stores
+  /// the size; rows whose file is missing (or lives behind a SAF URI) are
+  /// left untouched. Safe to run on every startup: rows with totals are
+  /// skipped outright.
+  Future<void> backfillMissingDownloadSizes() async {
+    final List<DownloadedMediaItem> rows;
+    try {
+      rows = await getAllDownloads();
+    } catch (e) {
+      appLogger.w('Download size backfill could not list rows', error: e);
+      return;
+    }
+    for (final row in rows) {
+      if (_disposed) return;
+      if (row.status != DownloadStatus.completed.index) continue;
+      if ((row.totalBytes ?? 0) > 0) continue;
+      final storedPath = row.videoFilePath;
+      if (storedPath == null || storedPath.isEmpty || _storageService.isSafUri(storedPath)) continue;
+      try {
+        final readablePath = await _storageService.getReadablePath(storedPath);
+        final file = File(readablePath);
+        if (!await file.exists()) continue;
+        final size = await file.length();
+        if (size <= 0) continue;
+        await _database.updateDownloadProgress(row.globalKey, 100, size, size);
+        if (_disposed) return;
+        _progressController.add(
+          DownloadProgress(
+            globalKey: row.globalKey,
+            status: DownloadStatus.completed,
+            progress: 100,
+            downloadedBytes: size,
+            totalBytes: size,
+            qualityPreset: row.qualityPreset ?? TranscodeQualityPreset.original.name,
+          ),
+        );
+      } catch (e) {
+        appLogger.d('Download size backfill failed for ${row.globalKey}', error: e);
+      }
     }
   }
 
