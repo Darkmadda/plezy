@@ -3059,6 +3059,69 @@ void main() {
       p.dispose();
     });
 
+    test('supplementary artwork/subtitle markers do not clobber finalized byte totals', () async {
+      final p = DownloadProvider.forTesting(downloadManager: downloadManager, database: db);
+      await p.ensureInitialized();
+      p.debugSeedState(ownedDownloadKeys: const {'srv:1'});
+
+      // _finalizeCompletedDownloadSize emits the statted size pre-transition.
+      downloadManager.debugEmitProgress(
+        const DownloadProgress(
+          globalKey: 'srv:1',
+          status: DownloadStatus.downloading,
+          progress: 100,
+          downloadedBytes: 738262023,
+          totalBytes: 738262023,
+          currentFile: 'video',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      // Artwork/subtitle markers carry status `downloading` with zeroed bytes.
+      downloadManager.debugEmitProgress(
+        const DownloadProgress(
+          globalKey: 'srv:1',
+          status: DownloadStatus.downloading,
+          progress: 0,
+          currentFile: 'artwork',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      downloadManager.debugEmitProgress(
+        const DownloadProgress(globalKey: 'srv:1', status: DownloadStatus.completed, progress: 100),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(p.downloads['srv:1']?.status, DownloadStatus.completed);
+      expect(p.downloads['srv:1']?.totalBytes, 738262023);
+      expect(p.downloads['srv:1']?.downloadedBytes, 738262023);
+      p.dispose();
+    });
+
+    test('pausing keeps the bytes downloaded so far', () async {
+      final p = DownloadProvider.forTesting(downloadManager: downloadManager, database: db);
+      await p.ensureInitialized();
+      p.debugSeedState(ownedDownloadKeys: const {'srv:1'});
+
+      downloadManager.debugEmitProgress(
+        const DownloadProgress(
+          globalKey: 'srv:1',
+          status: DownloadStatus.downloading,
+          progress: 47,
+          downloadedBytes: 500,
+          totalBytes: 1000,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      downloadManager.debugEmitProgress(const DownloadProgress(globalKey: 'srv:1', status: DownloadStatus.paused));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(p.downloads['srv:1']?.status, DownloadStatus.paused);
+      expect(p.downloads['srv:1']?.progress, 47);
+      expect(p.downloads['srv:1']?.downloadedBytes, 500);
+      expect(p.downloads['srv:1']?.totalBytes, 1000);
+      p.dispose();
+    });
+
     test('activity snapshots record offline-source transitions', () async {
       final source = _FakeOfflineModeSource(false);
       final p = DownloadProvider.forTesting(downloadManager: downloadManager, database: db);
