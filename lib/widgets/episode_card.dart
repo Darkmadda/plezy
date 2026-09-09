@@ -125,7 +125,6 @@ class _EpisodeCardState extends State<EpisodeCard> with ContextMenuTapMixin<Epis
   Widget _buildContent(BuildContext context, {required bool hideSpoilers}) {
     final episode = _effectiveEpisode(context);
     final shouldBlur = hideSpoilers && episode.shouldHideSpoiler;
-    final qualityLabels = [...buildMediaQualityLabels(episode), ?buildMediaSizeLabel(episode)];
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
@@ -314,7 +313,25 @@ class _EpisodeCardState extends State<EpisodeCard> with ContextMenuTapMixin<Epis
                           ],
 
                           const SizedBox(height: 6),
-                          _buildEpisodeMetaRow(context, episode, qualityLabels),
+                          // (completed, on-disk bytes, preset name) — primitives so
+                          // Selector equality skips unrelated download ticks.
+                          Selector<DownloadProvider, (bool, int, String?)>(
+                            selector: (_, p) {
+                              final download = p.getProgress(episode.globalKey);
+                              final completed = download?.status == DownloadStatus.completed;
+                              return (completed, completed ? download!.totalBytes : 0, completed ? download!.qualityPreset : null);
+                            },
+                            builder: (context, download, _) => _buildEpisodeMetaRow(
+                              context,
+                              episode,
+                              buildDownloadAwareQualityLabels(
+                                episode,
+                                downloadCompleted: download.$1,
+                                downloadTotalBytes: download.$2,
+                                downloadQualityPreset: download.$3,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),

@@ -538,20 +538,17 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
     appLogger.d('Progress update received: ${progress.globalKey} - ${progress.status} - ${progress.progress}%');
     final ownedByActiveProfile = _ownsDownloadKey(progress.globalKey);
     final previous = _downloads[progress.globalKey];
-    final terminalUpdateOmittedBytes =
+    // Status-only events omit byte fields: terminal transitions, pauses, and
+    // the supplementary artwork/subtitle markers (status `downloading`, zero
+    // bytes) that fire after the completed video's size was already emitted.
+    // Preserve known counters for all of them — only a `queued` event is an
+    // authoritative reset (fresh queue or retry).
+    final updateOmittedBytes =
         previous != null &&
         progress.downloadedBytes == 0 &&
         previous.downloadedBytes > 0 &&
-        switch (progress.status) {
-          DownloadStatus.completed ||
-          DownloadStatus.failed ||
-          DownloadStatus.cancelled ||
-          DownloadStatus.partial => true,
-          DownloadStatus.queued || DownloadStatus.downloading || DownloadStatus.paused => false,
-        };
-    // Terminal status-only events omit byte fields. Preserve only those omitted
-    // counters; live progress and explicit retry resets must remain authoritative.
-    var merged = terminalUpdateOmittedBytes
+        progress.status != DownloadStatus.queued;
+    var merged = updateOmittedBytes
         ? progress.copyWith(
             progress: progress.progress == 0 ? previous.progress : progress.progress,
             downloadedBytes: previous.downloadedBytes,

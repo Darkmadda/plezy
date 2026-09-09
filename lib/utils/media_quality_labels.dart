@@ -1,7 +1,9 @@
 import '../media/media_item.dart';
 import '../media/media_stream.dart';
 import '../media/media_version.dart';
+import '../models/transcode_quality_preset.dart';
 import 'codec_utils.dart';
+import 'quality_preset_labels.dart';
 import 'resolution_label.dart';
 import 'formatters.dart';
 
@@ -25,6 +27,37 @@ List<String> buildMediaQualityLabels(MediaItem item, {int versionIndex = 0}) {
   if (audioLabel != null) labels.add(audioLabel);
 
   return labels;
+}
+
+/// Chip labels for a media card, preferring what is actually on disk.
+///
+/// A completed download at original quality keeps the source chips but swaps
+/// in the real on-disk size. A completed transcoded download replaces the
+/// chips with its preset label — the source's resolution/HDR/audio no longer
+/// describe the downloaded file. Anything not (yet) downloaded falls through
+/// to the source metadata, including its server-reported size.
+List<String> buildDownloadAwareQualityLabels(
+  MediaItem item, {
+  bool downloadCompleted = false,
+  int downloadTotalBytes = 0,
+  String? downloadQualityPreset,
+  int versionIndex = 0,
+}) {
+  if (!downloadCompleted) {
+    return [
+      ...buildMediaQualityLabels(item, versionIndex: versionIndex),
+      ?buildMediaSizeLabel(item, versionIndex: versionIndex),
+    ];
+  }
+  final preset = TranscodeQualityPreset.fromName(downloadQualityPreset);
+  final sizeLabel = downloadTotalBytes > 0 ? ByteFormatter.formatBytes(downloadTotalBytes) : null;
+  if (preset.isOriginal) {
+    return [
+      ...buildMediaQualityLabels(item, versionIndex: versionIndex),
+      ?(sizeLabel ?? buildMediaSizeLabel(item, versionIndex: versionIndex)),
+    ];
+  }
+  return [qualityPresetLabel(preset), ?sizeLabel];
 }
 
 String? buildMediaSizeLabel(MediaItem item, {int versionIndex = 0}) {

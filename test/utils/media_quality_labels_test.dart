@@ -267,6 +267,81 @@ void main() {
       expect(buildMediaSizeLabel(item, versionIndex: 1), '2.00 GB');
     });
   });
+
+  group('buildDownloadAwareQualityLabels', () {
+    MediaItem sourceItem() => _episodeWithVersion(
+      const MediaVersion(
+        id: '1',
+        videoResolution: '1080',
+        parts: [
+          MediaPart(
+            id: 'part-1',
+            sizeBytes: 1536 * 1024 * 1024,
+            streams: [
+              MediaStream(id: 'video', kind: MediaStreamKind.video, hdr: true),
+              MediaStream(id: 'audio', kind: MediaStreamKind.audio, codec: 'eac3', channels: 6),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    test('not downloaded: source chips with server-reported size', () {
+      expect(buildDownloadAwareQualityLabels(sourceItem()), ['1080p', 'HDR', 'EAC3 5.1', '1.50 GB']);
+    });
+
+    test('completed original download: source chips with on-disk size', () {
+      final labels = buildDownloadAwareQualityLabels(
+        sourceItem(),
+        downloadCompleted: true,
+        downloadTotalBytes: 1024 * 1024 * 1024,
+        downloadQualityPreset: 'original',
+      );
+      expect(labels, ['1080p', 'HDR', 'EAC3 5.1', '1.00 GB']);
+    });
+
+    test('completed original download without byte totals falls back to server size', () {
+      final labels = buildDownloadAwareQualityLabels(
+        sourceItem(),
+        downloadCompleted: true,
+        downloadQualityPreset: 'original',
+      );
+      expect(labels, ['1080p', 'HDR', 'EAC3 5.1', '1.50 GB']);
+    });
+
+    test('completed transcoded download replaces source chips with preset label and on-disk size', () {
+      final labels = buildDownloadAwareQualityLabels(
+        sourceItem(),
+        downloadCompleted: true,
+        downloadTotalBytes: 738262023,
+        downloadQualityPreset: 'p720_4mbps',
+      );
+      expect(labels, hasLength(2));
+      expect(labels.first, contains('720p'));
+      expect(labels.first, isNot(contains('HDR')));
+      expect(labels.last, '704.1 MB');
+    });
+
+    test('completed transcoded download without byte totals shows only the preset label', () {
+      final labels = buildDownloadAwareQualityLabels(
+        sourceItem(),
+        downloadCompleted: true,
+        downloadQualityPreset: 'p720_4mbps',
+      );
+      expect(labels, hasLength(1));
+      expect(labels.single, contains('720p'));
+    });
+
+    test('unknown preset names are treated as original', () {
+      final labels = buildDownloadAwareQualityLabels(
+        sourceItem(),
+        downloadCompleted: true,
+        downloadTotalBytes: 1024,
+        downloadQualityPreset: 'p999_removed',
+      );
+      expect(labels, ['1080p', 'HDR', 'EAC3 5.1', '1.0 KB']);
+    });
+  });
 }
 
 PlexMediaItem _mediaItemFromJson(Map<String, dynamic> json, {ServerId? serverId}) {
