@@ -1,4 +1,6 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:plezy/i18n/strings.g.dart';
 import 'package:plezy/media/ids.dart';
 import 'package:plezy/media/media_backend.dart';
 import 'package:plezy/media/media_item.dart';
@@ -163,6 +165,152 @@ void main() {
 
     test('unknown preset names fall back to Original rather than crashing', () {
       expect(downloadLeafDetailLine(progress(qualityPreset: 'p999_removed')), 'Original');
+    });
+  });
+
+  group('multi-select', () {
+    setUpAll(() => LocaleSettings.setLocaleSync(AppLocale.en));
+
+    DownloadProgress completed(String globalKey) =>
+        DownloadProgress(globalKey: globalKey, status: DownloadStatus.completed, progress: 100);
+
+    // One show ("Show") with two episodes plus one movie ("Movie one-m") —
+    // three selectable leaves in total.
+    final downloads = {
+      'srv:e1': completed('srv:e1'),
+      'srv:e2': completed('srv:e2'),
+      'srv:m1': completed('srv:m1'),
+    };
+    final metadata = {
+      'srv:e1': testMediaItem(
+        id: 'e1',
+        backend: MediaBackend.plex,
+        kind: MediaKind.episode,
+        title: 'One',
+        serverId: ServerId('srv'),
+        grandparentId: 'show1',
+        grandparentTitle: 'Show',
+        parentId: 'season1',
+        parentTitle: 'Season 1',
+        parentIndex: 1,
+        index: 1,
+      ),
+      'srv:e2': testMediaItem(
+        id: 'e2',
+        backend: MediaBackend.plex,
+        kind: MediaKind.episode,
+        title: 'Two',
+        serverId: ServerId('srv'),
+        grandparentId: 'show1',
+        grandparentTitle: 'Show',
+        parentId: 'season1',
+        parentTitle: 'Season 1',
+        parentIndex: 1,
+        index: 2,
+      ),
+      'srv:m1': testMediaItem(
+        id: 'm1',
+        backend: MediaBackend.plex,
+        kind: MediaKind.movie,
+        title: 'Movie one-m',
+        serverId: ServerId('srv'),
+      ),
+    };
+
+    Future<void> pumpTree(WidgetTester tester, {void Function(String)? onDelete, void Function(String)? onPause}) {
+      return tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: DownloadTreeView(downloads: downloads, metadata: metadata, onDelete: onDelete, onPause: onPause),
+          ),
+        ),
+      );
+    }
+
+    testWidgets('long-pressing a leaf enters selection mode with it selected', (tester) async {
+      await pumpTree(tester, onDelete: (_) {});
+      expect(find.byType(Checkbox), findsNothing);
+
+      await tester.longPress(find.text('Movie one-m'));
+      await tester.pumpAndSettle();
+
+      // Visible rows (movie + collapsed show) now all show checkboxes.
+      expect(find.byType(Checkbox), findsNWidgets(2));
+      expect(find.text('1 selected'), findsOneWidget);
+    });
+
+    testWidgets('long-pressing a container selects its whole subtree', (tester) async {
+      await pumpTree(tester, onDelete: (_) {});
+
+      await tester.longPress(find.text('Show'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('2 selected'), findsOneWidget);
+    });
+
+    testWidgets('select all covers every leaf and delete confirms once for all of them', (tester) async {
+      final deleted = <String>[];
+      await pumpTree(tester, onDelete: deleted.add);
+
+      await tester.longPress(find.text('Movie one-m'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Select all'));
+      await tester.pumpAndSettle();
+      expect(find.text('3 selected'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Delete'));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete 3 downloads from this device?'), findsOneWidget);
+      await tester.tap(find.text('Delete').last);
+      await tester.pumpAndSettle();
+
+      expect(deleted.toSet(), {'srv:e1', 'srv:e2', 'srv:m1'});
+      // Selection mode exits after the action.
+      expect(find.byType(Checkbox), findsNothing);
+    });
+
+    testWidgets('container checkbox is tri-state over its leaves', (tester) async {
+      await pumpTree(tester, onDelete: (_) {});
+
+      // Expand the show, then its season, then select one of two episodes.
+      await tester.tap(find.text('Show'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Season 1'));
+      await tester.pumpAndSettle();
+      await tester.longPress(find.textContaining('One'));
+      await tester.pumpAndSettle();
+      expect(find.text('1 selected'), findsOneWidget);
+
+      // Rows render movies first, then the show tree:
+      // 0 = movie, 1 = show, 2 = season, 3-4 = episodes.
+      final showCheckbox = find.byType(Checkbox).at(1);
+      expect(tester.widget<Checkbox>(showCheckbox).value, isNull);
+
+      // Ticking the show's checkbox completes the subtree selection.
+      await tester.tap(showCheckbox);
+      await tester.pumpAndSettle();
+      expect(find.text('2 selected'), findsOneWidget);
+      expect(tester.widget<Checkbox>(showCheckbox).value, isTrue);
+
+      // Ticking again clears it.
+      await tester.tap(showCheckbox);
+      await tester.pumpAndSettle();
+      expect(find.text('0 selected'), findsOneWidget);
+      expect(tester.widget<Checkbox>(showCheckbox).value, isFalse);
+    });
+
+    testWidgets('close button exits selection mode and restores action buttons', (tester) async {
+      await pumpTree(tester, onDelete: (_) {});
+
+      await tester.longPress(find.text('Movie one-m'));
+      await tester.pumpAndSettle();
+      expect(find.byType(Checkbox), findsNWidgets(2));
+
+      await tester.tap(find.byTooltip('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(Checkbox), findsNothing);
+      expect(find.text('1 selected'), findsNothing);
     });
   });
 }
