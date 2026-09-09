@@ -4050,6 +4050,15 @@ class Translations$downloads$en {
 	/// en: 'Delete all'
 	String get deleteAll => 'Delete all';
 
+	/// en: '${count} selected'
+	String selectedCount({required Object count}) => '${count} selected';
+
+	/// en: 'Select all'
+	String get selectAll => 'Select all';
+
+	/// en: 'Delete ${count} downloads from this device?'
+	String deleteSelectedConfirm({required Object count}) => 'Delete ${count} downloads from this device?';
+
 	/// en: 'Select Version'
 	String get selectVersion => 'Select Version';
 
@@ -7859,6 +7868,9 @@ extension on Translations {
 			'downloads.pauseAll' => 'Pause all',
 			'downloads.resumeAll' => 'Resume all',
 			'downloads.deleteAll' => 'Delete all',
+			'downloads.selectedCount' => ({required Object count}) => '${count} selected',
+			'downloads.selectAll' => 'Select all',
+			'downloads.deleteSelectedConfirm' => ({required Object count}) => 'Delete ${count} downloads from this device?',
 			'downloads.selectVersion' => 'Select Version',
 			'downloads.selectQuality' => 'Download Quality',
 			'downloads.qualityUseDefault' => ({required Object quality}) => 'Default — ${quality}',
@@ -7997,11 +8009,11 @@ extension on Translations {
 			'companionRemote.remote.tabLibraries' => 'Libraries',
 			'companionRemote.remote.tabSearch' => 'Search',
 			'companionRemote.remote.tabDownloads' => 'Downloads',
+			_ => null,
+		} ?? switch (path) {
 			'companionRemote.remote.tabSettings' => 'Settings',
 			'companionRemote.remote.previous' => 'Previous',
 			'companionRemote.remote.playPause' => 'Play/Pause',
-			_ => null,
-		} ?? switch (path) {
 			'companionRemote.remote.next' => 'Next',
 			'companionRemote.remote.seekBack' => 'Seek Back',
 			'companionRemote.remote.stop' => 'Stop',

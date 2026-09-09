@@ -14,6 +14,9 @@ import '../utils/formatters.dart';
 import '../utils/global_key_utils.dart';
 import '../utils/quality_preset_labels.dart';
 import '../mixins/unsuppress_focus_mixin.dart';
+import '../services/watch_actions.dart';
+import '../utils/app_logger.dart';
+import '../utils/snackbar_helper.dart';
 import 'download_status_icon.dart';
 
 /// Represents a node in the download tree
@@ -99,11 +102,24 @@ class DownloadTreeView extends StatefulWidget {
 class _DownloadTreeViewState extends State<DownloadTreeView> with UnsuppressFocusFirstMixin<DownloadTreeView> {
   final Set<String> _expandedNodes = {};
 
+  /// Multi-select mode: entered by long-pressing any row, left via the
+  /// selection bar's close button or by completing an action. Holds leaf
+  /// globalKeys only — container checkboxes are a view over their leaves.
+  bool _selectionMode = false;
+  final Set<String> _selectedKeys = {};
+
   @override
   String get firstItemFocusDebugLabel => 'DownloadTreeView_firstItem';
 
   @override
   bool suppressAutoFocusOf(DownloadTreeView widget) => widget.suppressAutoFocus;
+
+  @override
+  void didUpdateWidget(DownloadTreeView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Downloads can disappear underneath the selection (deletion, sign-out).
+    _selectedKeys.removeWhere((key) => !widget.downloads.containsKey(key));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -114,13 +130,20 @@ class _DownloadTreeViewState extends State<DownloadTreeView> with UnsuppressFocu
       return Center(child: Text(t.downloads.noDownloadsTree));
     }
 
-    return ListView.builder(
-      padding: .zero,
-      itemCount: flattenedNodes.length,
-      itemBuilder: (context, index) {
-        final item = flattenedNodes[index];
-        return _buildTreeItem(item.node, item.depth, isFirst: index == 0);
-      },
+    return Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            padding: .zero,
+            itemCount: flattenedNodes.length,
+            itemBuilder: (context, index) {
+              final item = flattenedNodes[index];
+              return _buildTreeItem(item.node, item.depth, isFirst: index == 0);
+            },
+          ),
+        ),
+        if (_selectionMode) _buildSelectionBar(context),
+      ],
     );
   }
 
@@ -411,6 +434,215 @@ class _DownloadTreeViewState extends State<DownloadTreeView> with UnsuppressFocu
       pauseAllChildren: _pauseAllChildren,
       resumeAllChildren: _resumeAllChildren,
       deleteAllChildren: _deleteAllChildren,
+      selectionMode: _selectionMode,
+      checkState: _checkStateFor(node),
+      onToggleSelection: () => _toggleSelection(node),
+      onEnterSelection: () => _enterSelectionMode(node),
+    );
+  }
+
+  /// Checkbox state for a row: leaves are true/false, containers tri-state
+  /// (null = some but not all descendant leaves selected).
+  bool? _checkStateFor(DownloadTreeNode node) {
+    if (!node.hasChildren) return _selectedKeys.contains(node.key);
+    final leaves = _leafKeys(node);
+    final selected = leaves.where(_selectedKeys.contains).length;
+    if (selected == 0) return false;
+    return selected == leaves.length ? true : null;
+  }
+
+  void _enterSelectionMode(DownloadTreeNode node) {
+    setState(() {
+      _selectionMode = true;
+      _selectedKeys.addAll(node.hasChildren ? _leafKeys(node) : [node.key]);
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _selectionMode = false;
+      _selectedKeys.clear();
+    });
+  }
+
+  void _toggleSelection(DownloadTreeNode node) {
+    setState(() {
+      if (!node.hasChildren) {
+        if (!_selectedKeys.remove(node.key)) _selectedKeys.add(node.key);
+        return;
+      }
+      // Container checkbox: everything selected → clear the subtree,
+      // otherwise (none or partial) → select the whole subtree.
+      final leaves = _leafKeys(node);
+      if (leaves.every(_selectedKeys.contains)) {
+        _selectedKeys.removeAll(leaves);
+      } else {
+        _selectedKeys.addAll(leaves);
+      }
+    });
+  }
+
+  void _selectAll() {
+    setState(() {
+      for (final entry in widget.downloads.entries) {
+        final meta = widget.metadata[entry.key];
+        if (meta == null) continue;
+        // Same leaf predicate as [_buildTree] — only rows the tree shows.
+        if (meta.isEpisode || meta.isMovie || meta.kind == MediaKind.track) {
+          _selectedKeys.add(entry.key);
+        }
+      }
+    });
+  }
+
+  bool _selectionHasStatus(bool Function(DownloadStatus status) test) {
+    return _selectedKeys.any((key) {
+      final status = widget.downloads[key]?.status;
+      return status != null && test(status);
+    });
+  }
+
+  bool get _selectionHasVideo =>
+      _selectedKeys.any((key) => widget.metadata[key]?.isEpisode == true || widget.metadata[key]?.isMovie == true);
+
+  /// Run [action] on every selected item whose status passes [where], then
+  /// leave selection mode.
+  void _applyToSelected(void Function(String globalKey)? action, bool Function(DownloadStatus status) where) {
+    if (action == null) return;
+    for (final key in _selectedKeys) {
+      final status = widget.downloads[key]?.status;
+      if (status != null && where(status)) action(key);
+    }
+    _exitSelectionMode();
+  }
+
+  Future<void> _deleteSelected() async {
+    final keys = _selectedKeys.toList();
+    final confirmed = await showDeleteConfirmation(
+      context,
+      title: t.downloads.deleteDownload,
+      message: t.downloads.deleteSelectedConfirm(count: keys.length),
+    );
+    if (!confirmed || !mounted) return;
+    for (final key in keys) {
+      widget.onDelete?.call(key);
+    }
+    _exitSelectionMode();
+  }
+
+  /// Mark every selected movie/episode watched or unwatched through the
+  /// offline-aware [WatchActions] path (online → server + trackers, offline →
+  /// queued for later sync).
+  Future<void> _markSelectedWatched({required bool watched}) async {
+    final items = _selectedKeys
+        .map((key) => widget.metadata[key])
+        .whereType<MediaItem>()
+        .where((meta) => meta.isEpisode || meta.isMovie)
+        .toList();
+    var queuedOffline = false;
+    try {
+      for (final item in items) {
+        if (!mounted) return;
+        final outcome = await WatchActions.setWatched(context, item, watched: watched);
+        queuedOffline |= outcome == WatchMarkOutcome.queuedOffline;
+      }
+    } catch (e) {
+      appLogger.e('Failed to mark selected downloads ${watched ? 'watched' : 'unwatched'}', error: e);
+      if (mounted) showErrorSnackBar(context, t.messages.errorLoading(error: e.toString()));
+      return;
+    }
+    if (!mounted) return;
+    showAppSnackBar(
+      context,
+      watched
+          ? (queuedOffline ? t.messages.markedAsWatchedOffline : t.messages.markedAsWatched)
+          : (queuedOffline ? t.messages.markedAsUnwatchedOffline : t.messages.markedAsUnwatched),
+    );
+    _exitSelectionMode();
+  }
+
+  /// The bar shown while selecting: count, select-all, delete, and an
+  /// overflow menu whose entries appear only when the selection contains
+  /// items they apply to.
+  Widget _buildSelectionBar(BuildContext context) {
+    final theme = Theme.of(context);
+    final count = _selectedKeys.length;
+    final hasActive = _selectionHasStatus(
+      (s) => s == DownloadStatus.downloading || s == DownloadStatus.queued,
+    );
+    final hasPaused = _selectionHasStatus((s) => s == DownloadStatus.paused);
+    final hasFailed = _selectionHasStatus((s) => s == DownloadStatus.failed);
+    final hasVideo = _selectionHasVideo;
+
+    final overflowEntries = <PopupMenuEntry<VoidCallback>>[
+      if (hasActive && widget.onPause != null)
+        PopupMenuItem(
+          value: () => _applyToSelected(
+            widget.onPause,
+            (s) => s == DownloadStatus.downloading || s == DownloadStatus.queued,
+          ),
+          child: Text(t.common.pause),
+        ),
+      if (hasPaused && widget.onResume != null)
+        PopupMenuItem(
+          value: () => _applyToSelected(widget.onResume, (s) => s == DownloadStatus.paused),
+          child: Text(t.common.resume),
+        ),
+      if (hasActive && widget.onCancel != null)
+        PopupMenuItem(
+          value: () => _applyToSelected(
+            widget.onCancel,
+            (s) => s == DownloadStatus.downloading || s == DownloadStatus.queued,
+          ),
+          child: Text(t.common.cancel),
+        ),
+      if (hasFailed && widget.onRetry != null)
+        PopupMenuItem(
+          value: () => _applyToSelected(widget.onRetry, (s) => s == DownloadStatus.failed),
+          child: Text(t.downloads.retryDownload),
+        ),
+      if (hasVideo)
+        PopupMenuItem(value: () => _markSelectedWatched(watched: true), child: Text(t.mediaMenu.markAsWatched)),
+      if (hasVideo)
+        PopupMenuItem(value: () => _markSelectedWatched(watched: false), child: Text(t.mediaMenu.markAsUnwatched)),
+    ];
+
+    return Material(
+      elevation: 8,
+      color: theme.colorScheme.surfaceContainerHigh,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: t.common.cancel,
+                icon: const AppIcon(Symbols.close_rounded, fill: 1, size: 22),
+                onPressed: _exitSelectionMode,
+              ),
+              Text(t.downloads.selectedCount(count: count), style: theme.textTheme.titleSmall),
+              const Spacer(),
+              IconButton(
+                tooltip: t.downloads.selectAll,
+                icon: const AppIcon(Symbols.select_all_rounded, fill: 1, size: 22),
+                onPressed: _selectAll,
+              ),
+              IconButton(
+                tooltip: t.common.delete,
+                icon: const AppIcon(Symbols.delete_rounded, fill: 1, size: 22),
+                onPressed: count == 0 || widget.onDelete == null ? null : _deleteSelected,
+              ),
+              if (overflowEntries.isNotEmpty)
+                PopupMenuButton<VoidCallback>(
+                  icon: const AppIcon(Symbols.more_vert_rounded, fill: 1, size: 22),
+                  onSelected: (action) => action(),
+                  itemBuilder: (_) => overflowEntries,
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -533,6 +765,13 @@ class _DownloadTreeItem extends StatefulWidget {
   final void Function(DownloadTreeNode) resumeAllChildren;
   final void Function(DownloadTreeNode) deleteAllChildren;
 
+  /// Multi-select: while [selectionMode] is on, the row's action buttons are
+  /// replaced by a checkbox showing [checkState] (tri-state for containers).
+  final bool selectionMode;
+  final bool? checkState;
+  final VoidCallback onToggleSelection;
+  final VoidCallback onEnterSelection;
+
   const _DownloadTreeItem({
     required this.node,
     required this.depth,
@@ -550,6 +789,10 @@ class _DownloadTreeItem extends StatefulWidget {
     required this.pauseAllChildren,
     required this.resumeAllChildren,
     required this.deleteAllChildren,
+    required this.selectionMode,
+    required this.checkState,
+    required this.onToggleSelection,
+    required this.onEnterSelection,
   });
 
   @override
@@ -631,14 +874,23 @@ class _DownloadTreeItemState extends State<_DownloadTreeItem> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final canExpand = widget.node.hasChildren;
-    final actions = _actions();
+    // In selection mode every row trades its action buttons for a checkbox.
+    final actions = widget.selectionMode ? const <_RowAction>[] : _actions();
+
+    // Containers keep tap-to-expand even while selecting (their checkbox is
+    // the select-subtree target); leaf taps toggle their checkbox.
+    final VoidCallback? onRowActivated = canExpand
+        ? widget.onToggleExpansion
+        : widget.selectionMode
+        ? widget.onToggleSelection
+        : null;
 
     return Padding(
       padding: .only(left: widget.depth * 16.0),
       child: FocusableWrapper(
         focusNode: _rowFocusNode,
         autofocus: widget.autofocus,
-        onSelect: canExpand ? widget.onToggleExpansion : null,
+        onSelect: onRowActivated,
         onNavigateLeft: widget.onNavigateLeft,
         onNavigateRight: actions.isNotEmpty ? _focusFirstButton : null,
         onBack: widget.onBack,
@@ -647,14 +899,21 @@ class _DownloadTreeItemState extends State<_DownloadTreeItem> {
         useBackgroundFocus: true,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: canExpand ? widget.onToggleExpansion : null,
+          onTap: onRowActivated,
+          onLongPress: widget.selectionMode ? null : widget.onEnterSelection,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(
               children: [
                 Expanded(child: _buildRowContent(theme, canExpand)),
 
-                if (actions.isNotEmpty)
+                if (widget.selectionMode)
+                  Checkbox(
+                    tristate: canExpand,
+                    value: widget.checkState,
+                    onChanged: (_) => widget.onToggleSelection(),
+                  )
+                else if (actions.isNotEmpty)
                   Row(
                     mainAxisSize: .min,
                     children: [for (int i = 0; i < actions.length; i++) _buildActionButton(actions[i], i)],
