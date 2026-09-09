@@ -18,11 +18,11 @@ import '../services/sync_rule_executor.dart';
 import '../widgets/background_download_warning_banner.dart';
 import '../widgets/dialog_action_button.dart';
 import '../widgets/focusable_list_tile.dart';
-import '../media/media_version.dart';
 import '../models/transcode_quality_preset.dart';
 import 'app_logger.dart';
 import 'content_utils.dart';
 import 'dialogs.dart';
+import 'download_size_estimator.dart';
 import 'download_version_utils.dart';
 import 'platform_detector.dart';
 import 'quality_preset_labels.dart';
@@ -51,7 +51,7 @@ Future<TranscodeQualityPreset?> promptDownloadQuality(
       preset: p,
       sourceBitrateKbps: version?.bitrate,
       sourceDurationMs: metadata.durationMs,
-      sourceSizeBytes: _versionSizeBytes(version),
+      sourceSizeBytes: versionSizeBytes(version),
     );
     return size == null ? base : '$base · $size';
   }
@@ -68,17 +68,6 @@ Future<TranscodeQualityPreset?> promptDownloadQuality(
       ...TranscodeQualityPreset.displayOrder.map((p) => (icon: null, label: labelFor(p), value: p)),
     ],
   );
-}
-
-int? _versionSizeBytes(MediaVersion? version) {
-  if (version == null || version.parts.isEmpty) return null;
-  var total = 0;
-  for (final p in version.parts) {
-    final s = p.sizeBytes;
-    if (s == null || s <= 0) return null;
-    total += s;
-  }
-  return total > 0 ? total : null;
 }
 
 @visibleForTesting

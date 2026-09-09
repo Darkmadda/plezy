@@ -1756,7 +1756,9 @@ class DownloadManagerService {
     if (!isVideo) {
       effectiveQuality = TranscodeQualityPreset.original;
     } else {
-      effectiveQuality = quality ?? (await SettingsService.getInstance()).read(SettingsService.downloadQualityPreset);
+      final TranscodeQualityPreset requested =
+          quality ?? (await SettingsService.getInstance()).read(SettingsService.downloadQualityPreset);
+      effectiveQuality = _preferOriginalWhenSmaller(requested, metadata, mediaIndex);
     }
 
     final outcome = await _database.insertQueuedDownload(
@@ -1794,6 +1796,36 @@ class DownloadManagerService {
     // make consumers keep a stale previous value.
     _emitProgress(globalKey, DownloadStatus.queued, 0, qualityPreset: effectiveQuality.name);
     unawaited(_processQueue(client));
+  }
+
+  /// A transcode can never beat its source's quality, so when the requested
+  /// preset's estimated size (the same unpadded math behind the quality
+  /// picker's percentage) meets or exceeds the original file's, the original
+  /// is the strictly better download: equal-or-better quality, no larger.
+  /// Decided per item — one show batch can mix original and transcoded
+  /// episodes. Keeps the requested preset when neither the source's size nor
+  /// its bitrate is known.
+  TranscodeQualityPreset _preferOriginalWhenSmaller(
+    TranscodeQualityPreset requested,
+    MediaItem metadata,
+    int mediaIndex,
+  ) {
+    if (requested.isOriginal) return requested;
+    final versions = metadata.mediaVersions;
+    final version = versions != null && mediaIndex >= 0 && mediaIndex < versions.length ? versions[mediaIndex] : null;
+    if (version == null) return requested;
+    final swap = transcodeEstimateMeetsOriginal(
+      preset: requested,
+      sourceSizeBytes: versionSizeBytes(version),
+      sourceBitrateKbps: version.bitrate,
+      durationMs: metadata.durationMs,
+    );
+    if (!swap) return requested;
+    appLogger.i(
+      'Downloading original instead of ${requested.name} for ${metadata.globalKey}: '
+      'estimated transcode size meets or exceeds the original file',
+    );
+    return TranscodeQualityPreset.original;
   }
 
   String? _mediaSourceIdForIndex(MediaItem metadata, int mediaIndex) {

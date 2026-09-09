@@ -3,9 +3,8 @@ import 'package:flutter/widgets.dart';
 import '../i18n/strings.g.dart';
 import '../models/transcode_quality_preset.dart';
 import 'dialogs.dart';
+import 'download_size_estimator.dart';
 import 'formatters.dart';
-
-const int _audioBitrateEstimateKbps = 192;
 
 /// User-facing label for a quality preset.
 ///
@@ -39,33 +38,26 @@ String? qualityPresetSizeEstimate({
   required int? sourceDurationMs,
   int? sourceSizeBytes,
 }) {
+  // Both figures come from download_size_estimator so this display and the
+  // queue-time fall-back-to-original decision can never disagree.
+  final sourceBytes = estimateSourceBytes(
+    sourceSizeBytes: sourceSizeBytes,
+    sourceBitrateKbps: sourceBitrateKbps,
+    durationMs: sourceDurationMs,
+  );
   if (preset.isOriginal) {
-    if (sourceSizeBytes != null && sourceSizeBytes > 0) {
-      return ByteFormatter.formatBytes(sourceSizeBytes);
-    }
-    if (sourceDurationMs == null || sourceDurationMs <= 0) return null;
-    if (sourceBitrateKbps == null || sourceBitrateKbps <= 0) return null;
-    return ByteFormatter.formatBytes(sourceBitrateKbps * sourceDurationMs ~/ 8);
+    return sourceBytes == null ? null : ByteFormatter.formatBytes(sourceBytes);
   }
 
-  if (sourceDurationMs == null || sourceDurationMs <= 0) return null;
-  final videoKbps = preset.videoBitrateKbps;
-  if (videoKbps == null) return null;
-  final totalKbps = videoKbps + _audioBitrateEstimateKbps;
-  final estimatedBytes = totalKbps * sourceDurationMs ~/ 8;
+  final estimatedBytes = estimateDisplayedTranscodeBytes(preset: preset, durationMs: sourceDurationMs);
+  if (estimatedBytes == null) return null;
   final size = ByteFormatter.formatBytes(estimatedBytes);
 
   // Percentage compares estimated transcode size to the same source figure
   // the "Original" row displays — the real file size when known, otherwise
   // the bitrate × duration estimate. Mixing the two bases (real file size
   // vs. bitrate-based estimate) was causing visible mismatches.
-  int? sourceBytes;
-  if (sourceSizeBytes != null && sourceSizeBytes > 0) {
-    sourceBytes = sourceSizeBytes;
-  } else if (sourceBitrateKbps != null && sourceBitrateKbps > 0) {
-    sourceBytes = sourceBitrateKbps * sourceDurationMs ~/ 8;
-  }
-  if (sourceBytes != null && sourceBytes > 0) {
+  if (sourceBytes != null) {
     final pct = (estimatedBytes * 100 / sourceBytes).round();
     return '$size ($pct%)';
   }

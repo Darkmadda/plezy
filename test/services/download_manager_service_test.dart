@@ -19,7 +19,9 @@ import 'package:plezy/media/download_resolution.dart';
 import 'package:plezy/media/media_backend.dart';
 import 'package:plezy/media/media_item.dart';
 import 'package:plezy/media/media_kind.dart';
+import 'package:plezy/media/media_part.dart';
 import 'package:plezy/media/media_source_info.dart';
+import 'package:plezy/media/media_version.dart';
 import 'package:plezy/media/media_server_client.dart';
 import 'package:plezy/models/download_models.dart';
 import 'package:plezy/models/transcode_quality_preset.dart';
@@ -1436,6 +1438,119 @@ void main() {
 
       expect(httpClient.trackRequests, [1]);
       expect(await fixture.db.getPendingSupplementaryQueueItems(), isEmpty);
+    });
+  });
+
+  group('quality fallback to original', () {
+    // 1 h at p720_4mbps estimates to (4000 + 192) kbps × 3_600_000 ms / 8
+    // = 1_886_400_000 bytes — the same unpadded figure the picker displays.
+    const durationMs = 60 * 60 * 1000;
+
+    MediaItem itemWithSource({required String id, int? sizeBytes, int? bitrateKbps}) => testMediaItem(
+      id: id,
+      backend: MediaBackend.plex,
+      kind: MediaKind.movie,
+      serverId: ServerId('srv'),
+      title: 'Movie $id',
+      durationMs: durationMs,
+      mediaVersions: [
+        MediaVersion(
+          id: 'version-$id',
+          bitrate: bitrateKbps,
+          parts: [MediaPart(id: 'part-$id', sizeBytes: sizeBytes)],
+        ),
+      ],
+    );
+
+    Future<(DownloadManagerService, _SupplementaryFixture)> createManager() async {
+      final fixture = await _createSupplementaryFixture();
+      final client = _SupplementaryClient(
+        metadata: fixture.metadata,
+        resolution: () => const DownloadResolution(videoUrl: 'https://example.test/video'),
+      );
+      final manager = DownloadManagerService(
+        database: fixture.db,
+        storageService: fixture.storage,
+        clientResolver: (serverId, {clientScopeId}) => client,
+        downloadsSupportedOverride: true,
+        queueProcessorOverride: (_) async {},
+      );
+      addTearDown(manager.dispose);
+      return (manager, fixture);
+    }
+
+    test('a preset estimated at or above the original file size downloads the original instead', () async {
+      final (manager, fixture) = await createManager();
+      final events = <DownloadProgress>[];
+      final subscription = manager.progressStream.listen(events.add);
+      addTearDown(subscription.cancel);
+      final metadata = itemWithSource(id: 'small-source', sizeBytes: 500 * 1024 * 1024);
+
+      await manager.queueDownload(
+        metadata: metadata,
+        client: _SupplementaryClient(
+          metadata: metadata,
+          resolution: () => const DownloadResolution(videoUrl: 'https://example.test/video'),
+        ),
+        quality: TranscodeQualityPreset.p720_4mbps,
+      );
+
+      final row = await fixture.db.getDownloadedMedia(metadata.globalKey);
+      expect(row?.qualityPreset, isNull);
+      expect(events.single.qualityPreset, TranscodeQualityPreset.original.name);
+    });
+
+    test('a preset estimated below the original file size still transcodes', () async {
+      final (manager, fixture) = await createManager();
+      final metadata = itemWithSource(id: 'large-source', sizeBytes: 4 * 1024 * 1024 * 1024);
+
+      await manager.queueDownload(
+        metadata: metadata,
+        client: _SupplementaryClient(
+          metadata: metadata,
+          resolution: () => const DownloadResolution(videoUrl: 'https://example.test/video'),
+        ),
+        quality: TranscodeQualityPreset.p720_4mbps,
+      );
+
+      expect((await fixture.db.getDownloadedMedia(metadata.globalKey))?.qualityPreset, 'p720_4mbps');
+    });
+
+    test('the global default preset falls back per item too (sync rules pass no explicit quality)', () async {
+      final (manager, fixture) = await createManager();
+      await (await SettingsService.getInstance()).write(
+        SettingsService.downloadQualityPreset,
+        TranscodeQualityPreset.p720_4mbps,
+      );
+      // Real size unknown → the 3000 kbps source bitrate fallback (1.35 GB)
+      // is still below the 1.89 GB estimate.
+      final metadata = itemWithSource(id: 'bitrate-only', bitrateKbps: 3000);
+
+      await manager.queueDownload(
+        metadata: metadata,
+        client: _SupplementaryClient(
+          metadata: metadata,
+          resolution: () => const DownloadResolution(videoUrl: 'https://example.test/video'),
+        ),
+      );
+
+      expect((await fixture.db.getDownloadedMedia(metadata.globalKey))?.qualityPreset, isNull);
+    });
+
+    test('an unknown source size and bitrate never swaps blind', () async {
+      final (manager, fixture) = await createManager();
+      final metadata = itemWithSource(id: 'unknown-source');
+
+      await manager.queueDownload(
+        metadata: metadata,
+        client: _SupplementaryClient(
+          metadata: metadata,
+          resolution: () => const DownloadResolution(videoUrl: 'https://example.test/video'),
+        ),
+        quality: TranscodeQualityPreset.p720_4mbps,
+      );
+
+      expect((await fixture.db.getDownloadedMedia(metadata.globalKey))?.qualityPreset, 'p720_4mbps');
     });
   });
 
